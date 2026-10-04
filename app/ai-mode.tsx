@@ -170,7 +170,7 @@ export function AIModePanel(props: Props) {
           invalid_input: t('errorInvalidInput'), invalid_hand_data: t('errorInvalidHand'), invalid_action_history: t('errorInvalidActions'),
           invalid_request: t('errorInvalidRequest'), request_too_large: t('errorTooLarge'), timeout: t('errorTimeout'),
           network_error: t('errorConnection'), provider_error: t('errorProvider'), malformed_response: t('errorMalformed'),
-          rate_limited: t('errorRateLimited'), rate_limit_unavailable: t('errorRateLimitUnavailable'),
+          rate_limited: t('errorRateLimited'), daily_limit_reached: t('errorDailyLimitReached'), rate_limit_unavailable: t('errorRateLimitUnavailable'),
         };
         setAiError(messages[payload.error ?? ''] ?? t('errorGeneric'));
         return;

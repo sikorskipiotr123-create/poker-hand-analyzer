@@ -5,7 +5,7 @@ import type { PromptParts } from './ai-analysis';
 import { checkAnalyzeRateLimit, type RateLimitDecision } from './analyze-rate-limit';
 
 export type AnalysisProvider = (prompt: PromptParts, signal: AbortSignal) => Promise<unknown>;
-type AnalyzeErrorCode = AnalysisServiceErrorCode | 'rate_limited' | 'rate_limit_unavailable';
+type AnalyzeErrorCode = AnalysisServiceErrorCode | 'rate_limited' | 'daily_limit_reached' | 'rate_limit_unavailable';
 const errorMessages: Record<AnalyzeErrorCode, string> = {
   not_configured: 'AI analysis is not configured. Add a server-side API key to enable it.',
   configuration_error: 'AI model configuration is unavailable.',
@@ -15,7 +15,8 @@ const errorMessages: Record<AnalyzeErrorCode, string> = {
   provider_error: 'The AI service is temporarily unavailable. Please try again.',
   malformed_response: 'The AI service returned an unreadable analysis. Please try again.',
   rate_limited: 'Too many AI analyses were requested. Please wait before trying again.',
-  rate_limit_unavailable: 'AI analysis is temporarily unavailable because usage protection is not configured.',
+  daily_limit_reached: 'Today’s AI analysis limit has been reached. Please try again after the daily reset.',
+  rate_limit_unavailable: 'AI analysis is temporarily unavailable. Please try again later.',
 };
 function json(body: unknown, status: number, extraHeaders: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...extraHeaders } });
@@ -65,7 +66,8 @@ export async function handleAnalyzeRequest(request: Request, provider: AnalysisP
     return json({ error: 'rate_limit_unavailable', message: errorMessages.rate_limit_unavailable }, 503);
   }
   if (rateLimit.status === 'limited') {
-    return json({ error: 'rate_limited', message: errorMessages.rate_limited }, 429, { 'Retry-After': String(rateLimit.retryAfterSeconds) });
+    const code = rateLimit.scope === 'global' ? 'daily_limit_reached' : 'rate_limited';
+    return json({ error: code, message: errorMessages[code] }, 429, { 'Retry-After': String(rateLimit.retryAfterSeconds) });
   }
   const prompt = buildPokerPrompt(context);
   const timeout = AbortSignal.timeout(60_000);
