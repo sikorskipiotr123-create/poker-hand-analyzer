@@ -143,6 +143,14 @@ _Add screenshots here before publishing, for example:_
 
 ## Vercel deployment
 
+### Temporary deployment access gate
+
+Before the first public Vercel deployment, set DEPLOYMENT_ACCESS_SECRET in Vercel Project Settings → Environment Variables for every environment that should be protected. Use a unique random value of at least 32 characters; for example, generate one locally with openssl rand -hex 32. Keep it server-side, never prefix it with NEXT_PUBLIC_, and do not commit the value. The repository's .env.example contains only an empty placeholder.
+
+The temporary gate uses HTTP Basic Authentication at the Next.js middleware layer. Enter access as the username and the environment variable value as the password when the browser prompts. It protects page requests and all /api/* routes before they reach application handlers, so rejected requests cannot call OpenAI or consume the analysis limiter. Missing or too-short configuration fails closed with HTTP 503. Next.js static assets are excluded from the gate so CSS, scripts, and images load normally; do not place private data in public assets.
+
+To remove this temporary protection later, remove middleware.ts, lib/deployment-access.ts, and lib/deployment-access.test.cjs, remove the DEPLOYMENT_ACCESS_SECRET placeholder and this subsection, then deploy that reviewed change. Removing only the environment variable leaves the middleware fail-closed and the site unavailable.
+
 1. Push the project to a Git repository only after reviewing the repository and its full history for credentials.
 2. Import it into Vercel as a Next.js application; use the detected `npm run build` command.
 3. Set `OPENAI_API_KEY` and, optionally, `OPENAI_MODEL` in server-side Vercel Environment Variables.
