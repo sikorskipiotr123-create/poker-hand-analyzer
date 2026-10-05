@@ -1,10 +1,10 @@
 import { AnalysisInputError, buildPokerPrompt, MAX_ANALYSIS_BODY_BYTES, validateAIAnalysisContext } from './ai-analysis';
-import { validateAIAnalysisResult } from './ai-response';
-import { AnalysisServiceError, type AnalysisServiceErrorCode } from './ai-provider';
+import { AIResponseValidationError, validateAIAnalysisResult } from './ai-response';
+import { AnalysisServiceError, type AnalysisServiceErrorCode, type ProviderResponseDiagnostics } from './ai-provider';
 import type { PromptParts } from './ai-analysis';
 import { checkAnalyzeRateLimit, type RateLimitDecision } from './analyze-rate-limit';
 
-export type AnalysisProvider = (prompt: PromptParts, signal: AbortSignal) => Promise<unknown>;
+export type AnalysisProvider = (prompt: PromptParts, signal: AbortSignal, observeResponse?: (diagnostics: ProviderResponseDiagnostics) => void) => Promise<unknown>;
 type AnalyzeErrorCode = AnalysisServiceErrorCode | 'rate_limited' | 'daily_limit_reached' | 'rate_limit_unavailable';
 const errorMessages: Record<AnalyzeErrorCode, string> = {
   not_configured: 'AI analysis is not configured. Add a server-side API key to enable it.',
@@ -72,16 +72,32 @@ export async function handleAnalyzeRequest(request: Request, provider: AnalysisP
   const prompt = buildPokerPrompt(context);
   const timeout = AbortSignal.timeout(60_000);
   let rawResult: unknown;
+  let providerDiagnostics: ProviderResponseDiagnostics | undefined;
   const providerStartedAt = Date.now();
-  try { rawResult = await provider(prompt, timeout); }
+  try { rawResult = await provider(prompt, timeout, (diagnostics) => { providerDiagnostics = diagnostics; }); }
   catch (error) {
     const code: AnalysisServiceErrorCode = error instanceof AnalysisServiceError ? error.code : isTimeout(error, timeout) ? 'timeout' : 'provider_error';
     console.error('[Analyze API] provider failed', { code, elapsedMs: Date.now() - providerStartedAt, timeoutSource: code === 'timeout' ? timeout.aborted ? 'application_provider_deadline' : 'provider_or_transport_timeout' : undefined });
     return json({ error: code, message: errorMessages[code] }, code === 'not_configured' || code === 'configuration_error' ? 503 : code === 'timeout' ? 504 : code === 'billing_quota' ? 429 : 502);
   }
   try { return json({ result: validateAIAnalysisResult(rawResult, context) }, 200); }
-  catch {
-    console.error('[Analyze API] structured response validation failed');
+  catch (error) {
+    if (error instanceof AIResponseValidationError) {
+      console.error('[Analyze API] structured response validation failed', {
+        category: 'runtime_schema_validation_failure',
+        fieldPath: error.fieldPath,
+        validationCategory: error.category,
+        constraint: error.constraint,
+        ...providerDiagnostics,
+      });
+    } else {
+      console.error('[Analyze API] structured response validation failed', {
+        category: 'other_malformed_response',
+        fieldPath: '$',
+        validationCategory: 'unexpected_validator_error',
+        ...providerDiagnostics,
+      });
+    }
     return json({ error: 'malformed_response', message: errorMessages.malformed_response }, 502);
   }
 }

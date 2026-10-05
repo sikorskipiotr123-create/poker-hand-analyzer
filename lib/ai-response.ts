@@ -2,10 +2,52 @@ import { STREETS, type Street, type AIAnalysisContext } from './ai-context';
 import { createMathematicalSummary, deriveInputQuality, type AIAnalysisResult } from './ai-analysis';
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
-const isText = (value: unknown, max: number, min = 1): value is string => typeof value === 'string' && value.trim().length >= min && value.length <= max;
 const hasKeys = (value: Record<string, unknown>, keys: string[]) => Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 const STREET_FIELDS = ['assessment', 'explanation'];
 const BASE_FIELDS = ['situationSummary', 'mathematicalContext', 'streetAnalysis', 'rangeAnalysis', 'opponentAnalysis', 'recommendedLine', 'keyTakeaways', 'confidence', 'missingInformation'];
+
+export type AIResponseValidationCategory =
+  | 'object_expected'
+  | 'object_keys_mismatch'
+  | 'field_shape_mismatch'
+  | 'text_type_mismatch'
+  | 'text_empty'
+  | 'text_too_long'
+  | 'array_type_mismatch'
+  | 'array_length_out_of_bounds'
+  | 'array_item_invalid'
+  | 'enum_value_invalid';
+
+export class AIResponseValidationError extends Error {
+  constructor(
+    readonly fieldPath: string,
+    readonly category: AIResponseValidationCategory,
+    readonly constraint: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'AIResponseValidationError';
+  }
+}
+
+function fail(path: string, category: AIResponseValidationCategory, constraint: string, message: string): never {
+  throw new AIResponseValidationError(path, category, constraint, message);
+}
+
+function requireObject(value: unknown, path: string, message: string): Record<string, unknown> {
+  if (!isObject(value)) fail(path, 'object_expected', 'type:object', message);
+  return value;
+}
+
+function requireExactKeys(value: Record<string, unknown>, keys: string[], path: string, message: string): void {
+  if (!hasKeys(value, keys)) fail(path, 'object_keys_mismatch', 'exact_schema_keys', message);
+}
+
+function requireText(value: unknown, path: string, max: number, message: string, min = 1): asserts value is string {
+  if (typeof value !== 'string') fail(path, 'text_type_mismatch', 'type:string', message);
+  if (value.trim().length < min) fail(path, 'text_empty', 'non_empty_string', message);
+  if (value.length > max) fail(path, 'text_too_long', 'max_length:' + max, message);
+}
 
 const nullableStreetSchema = {
   anyOf: [
@@ -33,33 +75,77 @@ export const AI_ANALYSIS_JSON_SCHEMA = {
 
 /** Validates model content, then replaces math summary and uncertainty with server-derived facts. */
 export function validateAIAnalysisResult(value: unknown, context: AIAnalysisContext): AIAnalysisResult {
-  if (!isObject(value) || !hasKeys(value, BASE_FIELDS)) throw new Error('The AI response did not match the hand-review format.');
-  if (!isObject(value.mathematicalContext) || !hasKeys(value.mathematicalContext, ['summary']) || !isText(value.mathematicalContext.summary, 1200)) throw new Error('The AI response has an invalid mathematical section.');
-  if (!isObject(value.streetAnalysis) || !hasKeys(value.streetAnalysis, [...STREETS])) throw new Error('The AI response has an invalid street analysis.');
+  const root = requireObject(value, '$', 'The AI response did not match the hand-review format.');
+  requireExactKeys(root, BASE_FIELDS, '$', 'The AI response did not match the hand-review format.');
+
+  const math = requireObject(root.mathematicalContext, 'mathematicalContext', 'The AI response has an invalid mathematical section.');
+  requireExactKeys(math, ['summary'], 'mathematicalContext', 'The AI response has an invalid mathematical section.');
+  requireText(math.summary, 'mathematicalContext.summary', 1200, 'The AI response has an invalid mathematical section.');
+
+  const suppliedStreets = requireObject(root.streetAnalysis, 'streetAnalysis', 'The AI response has an invalid street analysis.');
+  requireExactKeys(suppliedStreets, [...STREETS], 'streetAnalysis', 'The AI response has an invalid street analysis.');
   const streetAnalysis = {} as AIAnalysisResult['streetAnalysis'];
   const applicable = new Set<Street>(context.actionHistory.map(({ street }) => street));
   if (context.board.length >= 3) applicable.add('flop');
   if (context.board.length >= 4) applicable.add('turn');
   if (context.board.length >= 5) applicable.add('river');
   for (const street of STREETS) {
-    const item = value.streetAnalysis[street];
+    const item = suppliedStreets[street];
     if (item === null) { streetAnalysis[street] = null; continue; }
     if (!applicable.has(street)) { streetAnalysis[street] = null; continue; }
-    if (!isObject(item) || !hasKeys(item, STREET_FIELDS) || !isText(item.assessment, 240) || !isText(item.explanation, 1400)) throw new Error(`The AI response has an invalid ${street} analysis.`);
-    streetAnalysis[street] = { assessment: item.assessment, explanation: item.explanation };
+    const path = 'streetAnalysis.' + street;
+    const streetItem = requireObject(item, path, 'The AI response has an invalid ' + street + ' analysis.');
+    requireExactKeys(streetItem, STREET_FIELDS, path, 'The AI response has an invalid ' + street + ' analysis.');
+    requireText(streetItem.assessment, path + '.assessment', 240, 'The AI response has an invalid ' + street + ' analysis.');
+    requireText(streetItem.explanation, path + '.explanation', 1400, 'The AI response has an invalid ' + street + ' analysis.');
+    streetAnalysis[street] = { assessment: streetItem.assessment as string, explanation: streetItem.explanation as string };
   }
-  if (!isObject(value.rangeAnalysis) || !hasKeys(value.rangeAnalysis, ['hero', 'villain', 'interaction']) || !isText(value.rangeAnalysis.hero, 1200) || !isText(value.rangeAnalysis.villain, 1200) || !isText(value.rangeAnalysis.interaction, 1600)) throw new Error('The AI response has an invalid range analysis.');
-  if (!isObject(value.recommendedLine) || !hasKeys(value.recommendedLine, ['action', 'explanation']) || !isText(value.recommendedLine.action, 120) || !isText(value.recommendedLine.explanation, 1600)) throw new Error('The AI response has an invalid recommendation.');
-  if (!isText(value.situationSummary, 1400) || !isText(value.opponentAnalysis, 1400) || !Array.isArray(value.keyTakeaways) || value.keyTakeaways.length < 1 || value.keyTakeaways.length > 6 || value.keyTakeaways.some((item) => !isText(item, 320)) || !['low', 'medium', 'high'].includes(String(value.confidence)) || !Array.isArray(value.missingInformation) || value.missingInformation.length > 12 || value.missingInformation.some((item) => !isText(item, 240))) throw new Error('The AI response is incomplete or malformed.');
+
+  const ranges = requireObject(root.rangeAnalysis, 'rangeAnalysis', 'The AI response has an invalid range analysis.');
+  requireExactKeys(ranges, ['hero', 'villain', 'interaction'], 'rangeAnalysis', 'The AI response has an invalid range analysis.');
+  requireText(ranges.hero, 'rangeAnalysis.hero', 1200, 'The AI response has an invalid range analysis.');
+  requireText(ranges.villain, 'rangeAnalysis.villain', 1200, 'The AI response has an invalid range analysis.');
+  requireText(ranges.interaction, 'rangeAnalysis.interaction', 1600, 'The AI response has an invalid range analysis.');
+
+  const line = requireObject(root.recommendedLine, 'recommendedLine', 'The AI response has an invalid recommendation.');
+  requireExactKeys(line, ['action', 'explanation'], 'recommendedLine', 'The AI response has an invalid recommendation.');
+  requireText(line.action, 'recommendedLine.action', 120, 'The AI response has an invalid recommendation.');
+  requireText(line.explanation, 'recommendedLine.explanation', 1600, 'The AI response has an invalid recommendation.');
+
+  requireText(root.situationSummary, 'situationSummary', 1400, 'The AI response is incomplete or malformed.');
+  requireText(root.opponentAnalysis, 'opponentAnalysis', 1400, 'The AI response is incomplete or malformed.');
+
+  if (!Array.isArray(root.keyTakeaways)) fail('keyTakeaways', 'array_type_mismatch', 'type:array', 'The AI response is incomplete or malformed.');
+  if (root.keyTakeaways.length < 1 || root.keyTakeaways.length > 6) fail('keyTakeaways', 'array_length_out_of_bounds', 'items:1-6', 'The AI response is incomplete or malformed.');
+  root.keyTakeaways.forEach((item, index) => {
+    try { requireText(item, 'keyTakeaways[' + index + ']', 320, 'The AI response is incomplete or malformed.'); }
+    catch (error) {
+      if (error instanceof AIResponseValidationError) fail(error.fieldPath, 'array_item_invalid', error.constraint, 'The AI response is incomplete or malformed.');
+      throw error;
+    }
+  });
+
+  if (!['low', 'medium', 'high'].includes(String(root.confidence))) fail('confidence', 'enum_value_invalid', 'allowed:low|medium|high', 'The AI response is incomplete or malformed.');
+
+  if (!Array.isArray(root.missingInformation)) fail('missingInformation', 'array_type_mismatch', 'type:array', 'The AI response is incomplete or malformed.');
+  if (root.missingInformation.length > 12) fail('missingInformation', 'array_length_out_of_bounds', 'items:0-12', 'The AI response is incomplete or malformed.');
+  root.missingInformation.forEach((item, index) => {
+    try { requireText(item, 'missingInformation[' + index + ']', 240, 'The AI response is incomplete or malformed.'); }
+    catch (error) {
+      if (error instanceof AIResponseValidationError) fail(error.fieldPath, 'array_item_invalid', error.constraint, 'The AI response is incomplete or malformed.');
+      throw error;
+    }
+  });
+
   const quality = deriveInputQuality(context);
   return {
-    situationSummary: value.situationSummary,
+    situationSummary: root.situationSummary as string,
     mathematicalContext: { summary: createMathematicalSummary(context) },
     streetAnalysis,
-    rangeAnalysis: { hero: value.rangeAnalysis.hero, villain: value.rangeAnalysis.villain, interaction: value.rangeAnalysis.interaction },
-    opponentAnalysis: value.opponentAnalysis,
-    recommendedLine: { action: value.recommendedLine.action, explanation: value.recommendedLine.explanation },
-    keyTakeaways: value.keyTakeaways as string[],
+    rangeAnalysis: { hero: ranges.hero as string, villain: ranges.villain as string, interaction: ranges.interaction as string },
+    opponentAnalysis: root.opponentAnalysis as string,
+    recommendedLine: { action: line.action as string, explanation: line.explanation as string },
+    keyTakeaways: root.keyTakeaways as string[],
     confidence: quality.confidence,
     missingInformation: quality.missingInformation,
   };
