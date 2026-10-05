@@ -17,15 +17,15 @@ export type RedisFailureCategory =
   | 'malformed_redis_response'
   | 'invalid_lua_result';
 
-export class RedisDiagnosticError extends Error {
+class RedisRateLimitError extends Error {
   constructor(readonly category: RedisFailureCategory, readonly httpStatus?: number) {
     super(category);
-    this.name = 'RedisDiagnosticError';
+    this.name = 'RedisRateLimitError';
   }
 }
 
 type RedisConfig = { endpoint: URL; token: string };
-type RedisDiagnosticResult = { result: unknown; httpStatus: number };
+type RedisCommandResult = { result: unknown; httpStatus: number };
 
 function logRedisFailure(category: RedisFailureCategory, metadata: Record<string, string | number> = {}): void {
   if (process.env.NODE_ENV !== 'production') return;
@@ -37,18 +37,18 @@ function getRedisConfig(): RedisConfig {
   const restUrl = process.env.UPSTASH_REDIS_REST_URL?.trim();
   const restToken = process.env.UPSTASH_REDIS_REST_TOKEN?.trim();
   if (!restUrl || !restToken) {
-    throw new RedisDiagnosticError('missing_environment_variable');
+    throw new RedisRateLimitError('missing_environment_variable');
   }
 
   let endpoint: URL;
   try { endpoint = new URL(restUrl); } catch {
-    throw new RedisDiagnosticError('invalid_redis_url');
+    throw new RedisRateLimitError('invalid_redis_url');
   }
-  if (endpoint.protocol !== 'https:') throw new RedisDiagnosticError('invalid_redis_url');
+  if (endpoint.protocol !== 'https:') throw new RedisRateLimitError('invalid_redis_url');
   return { endpoint, token: restToken };
 }
 
-async function sendRedisCommand(config: RedisConfig, command: string[]): Promise<RedisDiagnosticResult> {
+async function sendRedisCommand(config: RedisConfig, command: string[]): Promise<RedisCommandResult> {
   let response: Response;
   try {
     response = await fetch(config.endpoint, {
@@ -60,22 +60,22 @@ async function sendRedisCommand(config: RedisConfig, command: string[]): Promise
     });
   } catch (error) {
     const name = error instanceof Error ? error.name : '';
-    throw new RedisDiagnosticError(name === 'TimeoutError' || name === 'AbortError' ? 'redis_timeout' : 'redis_network_error');
+    throw new RedisRateLimitError(name === 'TimeoutError' || name === 'AbortError' ? 'redis_timeout' : 'redis_network_error');
   }
 
   if (!response.ok) {
     const category = response.status === 401 || response.status === 403 ? 'redis_http_401_403' : 'redis_http_other';
-    throw new RedisDiagnosticError(category, response.status);
+    throw new RedisRateLimitError(category, response.status);
   }
 
   let payload: unknown;
   try { payload = await response.json(); } catch (error) {
     const name = error instanceof Error ? error.name : '';
     const category = name === 'TimeoutError' || name === 'AbortError' ? 'redis_timeout' : 'malformed_redis_response';
-    throw new RedisDiagnosticError(category, response.status);
+    throw new RedisRateLimitError(category, response.status);
   }
   if (!payload || typeof payload !== 'object' || !('result' in payload)) {
-    throw new RedisDiagnosticError('malformed_redis_response', response.status);
+    throw new RedisRateLimitError('malformed_redis_response', response.status);
   }
   return { result: payload.result, httpStatus: response.status };
 }
@@ -83,10 +83,6 @@ async function sendRedisCommand(config: RedisConfig, command: string[]): Promise
 function clientAddress(request: Request): string | null {
   const forwarded = request.headers.get('x-vercel-forwarded-for') ?? request.headers.get('x-forwarded-for') ?? request.headers.get('x-real-ip');
   return forwarded?.split(',')[0]?.trim() || null;
-}
-
-export function hasClientIpHeader(request: Request): boolean {
-  return clientAddress(request) !== null;
 }
 
 function addressDigest(address: string, secret: string): string {
@@ -164,7 +160,7 @@ export type RateLimitDecision =
   | { status: 'unavailable' };
 
 function invalidLuaResult(httpStatus?: number): never {
-  throw new RedisDiagnosticError('invalid_lua_result', httpStatus);
+  throw new RedisRateLimitError('invalid_lua_result', httpStatus);
 }
 
 async function checkSharedRateLimit(address: string, config: RedisConfig, now: number): Promise<RateLimitDecision> {
@@ -180,7 +176,7 @@ async function checkSharedRateLimit(address: string, config: RedisConfig, now: n
     String(ANALYZE_RATE_LIMIT), String(ANALYZE_RATE_WINDOW_SECONDS + 2),
     String(GLOBAL_ANALYZE_DAILY_LIMIT), String(dailyExpiry),
   ]);
-  if (!Array.isArray(result) || result.length !== 3) throw new RedisDiagnosticError('malformed_redis_response', httpStatus);
+  if (!Array.isArray(result) || result.length !== 3) throw new RedisRateLimitError('malformed_redis_response', httpStatus);
   const [code, ipCount, dailyCount] = result;
   if (!Number.isInteger(code) || !isSafeInteger(ipCount) || !isSafeInteger(dailyCount)) invalidLuaResult(httpStatus);
   if (code === -1) invalidLuaResult(httpStatus);
@@ -199,65 +195,17 @@ async function checkSharedRateLimit(address: string, config: RedisConfig, now: n
   invalidLuaResult(httpStatus);
 }
 
-export type RedisDiagnosticCheck = { status: 'PASS' | 'FAIL'; category?: RedisFailureCategory };
-export type RedisDiagnostics = {
-  status: 'PASS' | 'FAIL';
-  checks: { redisPing: RedisDiagnosticCheck; readOnlyLuaEval: RedisDiagnosticCheck; clientIpHeaderPresent: 'PASS' | 'FAIL' };
-  failures: RedisFailureCategory[];
-};
-
-/** Performs only PING and EVAL return 1 with zero keys; it never touches limiter data. */
-export async function runRedisDiagnostics(request: Request): Promise<RedisDiagnostics> {
-  const ipPresent = hasClientIpHeader(request);
-  const checks: RedisDiagnostics['checks'] = {
-    redisPing: { status: 'FAIL' },
-    readOnlyLuaEval: { status: 'FAIL' },
-    clientIpHeaderPresent: ipPresent ? 'PASS' : 'FAIL',
-  };
-  const failures: RedisFailureCategory[] = [];
-  let config: RedisConfig;
-  try { config = getRedisConfig(); } catch (error) {
-    const category = error instanceof RedisDiagnosticError ? error.category : 'invalid_redis_url';
-    failures.push(category);
-    checks.redisPing = { status: 'FAIL', category };
-    checks.readOnlyLuaEval = { status: 'FAIL', category };
-    if (!ipPresent) failures.push('missing_client_ip');
-    return { status: 'FAIL', checks, failures: [...new Set(failures)] };
-  }
-
-  const runCheck = async (command: string[], expected: unknown): Promise<RedisDiagnosticCheck> => {
-    try {
-      const response = await sendRedisCommand(config, command);
-      if (response.result !== expected) throw new RedisDiagnosticError('malformed_redis_response', response.httpStatus);
-      return { status: 'PASS' };
-    } catch (error) {
-      const category = error instanceof RedisDiagnosticError ? error.category : 'redis_network_error';
-      failures.push(category);
-      return { status: 'FAIL', category };
-    }
-  };
-
-  checks.redisPing = await runCheck(['PING'], 'PONG');
-  checks.readOnlyLuaEval = await runCheck(['EVAL', 'return 1', '0'], 1);
-  if (!ipPresent) failures.push('missing_client_ip');
-  return {
-    status: checks.redisPing.status === 'PASS' && checks.readOnlyLuaEval.status === 'PASS' && ipPresent ? 'PASS' : 'FAIL',
-    checks,
-    failures: [...new Set(failures)],
-  };
-}
-
 /** Production calls fail closed unless shared Upstash limits are configured; local dev uses a process-local IP bucket. */
 export async function checkAnalyzeRateLimit(request: Request): Promise<RateLimitDecision> {
   const address = clientAddress(request);
   if (process.env.NODE_ENV === 'production') {
     try {
-      if (!address) throw new RedisDiagnosticError('missing_client_ip');
+      if (!address) throw new RedisRateLimitError('missing_client_ip');
       const config = getRedisConfig();
       return await checkSharedRateLimit(address, config, Date.now());
     } catch (error) {
-      const category = error instanceof RedisDiagnosticError ? error.category : 'redis_network_error';
-      logRedisFailure(category, error instanceof RedisDiagnosticError && error.httpStatus ? { httpStatus: error.httpStatus } : {});
+      const category = error instanceof RedisRateLimitError ? error.category : 'redis_network_error';
+      logRedisFailure(category, error instanceof RedisRateLimitError && error.httpStatus ? { httpStatus: error.httpStatus } : {});
       return { status: 'unavailable' };
     }
   }

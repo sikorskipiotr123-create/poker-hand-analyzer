@@ -6,7 +6,7 @@ export class AnalysisServiceError extends Error {
   constructor(readonly code: AnalysisServiceErrorCode) { super(code); this.name = 'AnalysisServiceError'; }
 }
 
-const DEFAULT_MODEL = 'gpt-6-astra';
+const DEFAULT_MODEL = 'gpt-5.6-terra';
 export function getAIConfiguration() {
   return { apiKey: process.env.OPENAI_API_KEY?.trim() || null, model: process.env.OPENAI_MODEL?.trim() || DEFAULT_MODEL };
 }

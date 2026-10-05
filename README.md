@@ -98,7 +98,7 @@ Open [http://localhost:3000](http://localhost:3000). Mathematical Analysis works
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `OPENAI_API_KEY` | For AI analysis | Server-side credential for the OpenAI Responses API. Never commit it or expose it to browser code. |
-| `OPENAI_MODEL` | No | Model name; defaults to `gpt-6-astra`. |
+| `OPENAI_MODEL` | No | Model name; defaults to `gpt-5.6-terra`. |
 | `UPSTASH_REDIS_REST_URL` | In production for AI analysis | HTTPS REST endpoint for a shared Upstash Redis database used by the rate limiter. |
 | `UPSTASH_REDIS_REST_TOKEN` | In production for AI analysis | Server-side Upstash credential. Keep it secret. |
 
@@ -106,7 +106,7 @@ In production, the AI endpoint fails closed with HTTP 503 if the shared rate lim
 
 ## AI API protection and deployment requirements
 
-`POST /api/analyze` is an unauthenticated endpoint: it does not require an account or user login. In production it enforces **5 valid analysis requests per client IP per 10-minute window** using an atomic Redis counter shared between serverless instances. Configure `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` in the production environment before enabling AI analysis. If Redis is unavailable, requests are rejected rather than sent to OpenAI.
+`POST /api/analyze` is protected by the temporary deployment-wide HTTP Basic Auth gate and does not require a separate user account. In production it also enforces **5 valid analysis requests per client IP per 10-minute window** and **100 valid requests per UTC day globally** using atomic Redis counters shared between serverless instances. Configure `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` in the production environment before enabling AI analysis. If Redis is unavailable, requests are rejected rather than sent to OpenAI.
 
 An IP-based limit reduces accidental and basic automated abuse; it is not identity-based access control and can be bypassed with multiple IPs. Before operating a public app with a developer-owned OpenAI key, also configure a Vercel Firewall/WAF rate limit and OpenAI project usage limits/alerts. Add authentication or per-user quotas if the product needs stronger cost ownership. Do not treat the in-memory development limiter as production protection.
 
