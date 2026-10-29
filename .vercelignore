@@ -1,0 +1,12 @@
+.env*
+.vercel/
+.git/
+node_modules/
+.next/
+work/
+outputs/
+coverage/
+*.log
+*.tsbuildinfo
+RELEASE-MANIFEST.json
+RELEASE-NOTES.md

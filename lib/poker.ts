@@ -91,7 +91,7 @@ export function evaluate(cards: Card[]): HandScore {
   return best;
 }
 
-export type EquityOptions = { samples?: number; rng?: () => number; exactCaseLimit?: number; shouldCancel?: () => boolean; onProgress?: (progress: number) => void };
+export type EquityOptions = { yieldEvery?: number; samples?: number; rng?: () => number; exactCaseLimit?: number; shouldCancel?: () => boolean; onProgress?: (progress: number) => void };
 const choose = (n: number, k: number): number => {
   if (k < 0 || n < k) return 0;
   let result = 1;
@@ -117,6 +117,8 @@ export async function calculateEquity(hero: Card[], board: Card[], villain: Card
   const exactCaseLimit = options.exactCaseLimit ?? MAX_EXACT_EQUITY_CASES;
   const sourceRng = options.rng ?? Math.random;
   const rng = () => { const value = sourceRng(); if (!Number.isFinite(value) || value < 0 || value >= 1) throw new RangeError('Random generator must return a value in [0, 1).'); return value; };
+  const yieldEvery = options.yieldEvery ?? 2_000;
+  if (!Number.isInteger(yieldEvery) || yieldEvery < 1) throw new RangeError('Yield interval must be a positive integer.');
   const shouldCancel = options.shouldCancel;
   const onProgress = options.onProgress;
   if (!Number.isInteger(samples) || samples < 1) throw new RangeError('Monte Carlo sample count must be a positive integer.');
@@ -144,7 +146,7 @@ export async function calculateEquity(hero: Card[], board: Card[], villain: Card
     for (const runout of combinations(remaining, missingBoard)) {
       if (shouldCancel?.()) break;
       record(runout);
-      if (total % 2_000 === 0) { onProgress?.(total / exactRunouts); await yieldToBrowser(); }
+      if (total % yieldEvery === 0) { onProgress?.(total / exactRunouts); await yieldToBrowser(); }
     }
     onProgress?.(1);
     return result('exact');

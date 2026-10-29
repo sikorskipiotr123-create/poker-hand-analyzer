@@ -1,3 +1,4 @@
+import { AI_RECOMMENDATION_LIMITS } from './ai-recommendation-limits';
 import { STREETS, type Street, type AIAnalysisContext } from './ai-context';
 import { createMathematicalSummary, deriveInputQuality, type AIAnalysisResult } from './ai-analysis';
 
@@ -46,7 +47,8 @@ function requireExactKeys(value: Record<string, unknown>, keys: string[], path: 
 function requireText(value: unknown, path: string, max: number, message: string, min = 1): asserts value is string {
   if (typeof value !== 'string') fail(path, 'text_type_mismatch', 'type:string', message);
   if (value.trim().length < min) fail(path, 'text_empty', 'non_empty_string', message);
-  if (value.length > max) fail(path, 'text_too_long', 'max_length:' + max, message);
+  // JSON Schema maxLength counts Unicode code points, not UTF-16 code units.
+  if (Array.from(value).length > max) fail(path, 'text_too_long', 'max_length:' + max, message);
 }
 
 const nullableStreetSchema = {
@@ -64,7 +66,7 @@ export const AI_ANALYSIS_JSON_SCHEMA = {
     streetAnalysis: { type: 'object', properties: { preflop: nullableStreetSchema, flop: nullableStreetSchema, turn: nullableStreetSchema, river: nullableStreetSchema }, required: [...STREETS], additionalProperties: false },
     rangeAnalysis: { type: 'object', properties: { hero: { type: 'string' }, villain: { type: 'string' }, interaction: { type: 'string' } }, required: ['hero', 'villain', 'interaction'], additionalProperties: false },
     opponentAnalysis: { type: 'string' },
-    recommendedLine: { type: 'object', properties: { action: { type: 'string' }, explanation: { type: 'string' } }, required: ['action', 'explanation'], additionalProperties: false },
+    recommendedLine: { type: 'object', properties: { action: { type: 'string', minLength: 1, maxLength: AI_RECOMMENDATION_LIMITS.action, description: 'A concise recommended action, sizing and essential conditions; detailed reasoning belongs in explanation.' }, explanation: { type: 'string', minLength: 1, maxLength: AI_RECOMMENDATION_LIMITS.explanation } }, required: ['action', 'explanation'], additionalProperties: false },
     keyTakeaways: { type: 'array', items: { type: 'string' } },
     confidence: { type: 'string', enum: ['low', 'medium', 'high'] },
     missingInformation: { type: 'array', items: { type: 'string' } },
@@ -109,8 +111,8 @@ export function validateAIAnalysisResult(value: unknown, context: AIAnalysisCont
 
   const line = requireObject(root.recommendedLine, 'recommendedLine', 'The AI response has an invalid recommendation.');
   requireExactKeys(line, ['action', 'explanation'], 'recommendedLine', 'The AI response has an invalid recommendation.');
-  requireText(line.action, 'recommendedLine.action', 120, 'The AI response has an invalid recommendation.');
-  requireText(line.explanation, 'recommendedLine.explanation', 1600, 'The AI response has an invalid recommendation.');
+  requireText(line.action, 'recommendedLine.action', AI_RECOMMENDATION_LIMITS.action, 'The AI response has an invalid recommendation.');
+  requireText(line.explanation, 'recommendedLine.explanation', AI_RECOMMENDATION_LIMITS.explanation, 'The AI response has an invalid recommendation.');
 
   requireText(root.situationSummary, 'situationSummary', 1400, 'The AI response is incomplete or malformed.');
   requireText(root.opponentAnalysis, 'opponentAnalysis', 1400, 'The AI response is incomplete or malformed.');

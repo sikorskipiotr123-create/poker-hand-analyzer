@@ -1,0 +1,30 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '08:00'
+      timezone: Europe/Warsaw
+    open-pull-requests-limit: 5
+    groups:
+      nextjs-minor-patch:
+        patterns: ['next', 'eslint-config-next']
+        update-types: ['minor', 'patch']
+      npm-minor-patch:
+        patterns: ['*']
+        exclude-patterns: ['next', 'eslint-config-next']
+        update-types: ['minor', 'patch']
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '08:00'
+      timezone: Europe/Warsaw
+    open-pull-requests-limit: 5
+    groups:
+      actions-minor-patch:
+        patterns: ['*']
+        update-types: ['minor', 'patch']

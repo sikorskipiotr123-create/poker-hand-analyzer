@@ -99,7 +99,33 @@ The recommendation follows the resulting call EV: positive supports a mathematic
 
 When the user explicitly requests a review, the browser sends the supplied hand context to a server-side Next.js route. The route validates the request, applies usage controls, and calls the OpenAI Responses API using Structured Outputs.
 
-The server rejects incomplete provider responses and validates the returned fields before display. Mathematical context shown with the review is derived from the validated input, not accepted from model-generated prose. AI commentary can be incomplete or mistaken; it does not calculate equity or EV and does not promise an optimal strategy.
+The server rejects incomplete provider responses and validates the returned fields before display. Mathematical context shown with the review is recomputed server-side from validated primitive assumptions, not accepted from client calculations or model-generated prose. The server enumerates equity only within its fixed budget; otherwise equity and dependent call EV are explicitly unknown. AI commentary can be incomplete or mistaken; it does not calculate equity or EV and does not promise an optimal strategy.
+
+### Deployment security
+
+For a protected staging pilot, see the [staging configuration, phased tests and rollback plan](docs/staging-readiness.md). This plan requires separate approval before deployment and does not change production.
+
+The current local source adds a configurable 16,000-token AI output cap, a shared Redis concurrency limit (default 3), and a server-side AI shutdown switch. Existing quotas remain 100 admitted validated requests per UTC day and 5 per IP per UTC day. Separate atomic attempt controls (20/IP and 1,000 globally per fixed ten minutes) protect body reading and verification. Malformed and checkable mathematically invalid hands do not consume analysis quota. Busy requests are rejected before analysis admission; admitted analyses are not refunded. See [attempts, validated admissions and failure accounting](docs/ai-quota-accounting.md). These changes are not a claim about live deployment. See [configuration, token-budget evidence, lease recovery and remaining public-abuse risks](docs/ai-cost-controls.md).
+
+The current source defaults to `APPLICATION_ACCESS_MODE=private`. Explicit `public` mode removes application Basic Auth from pages and the AI endpoint while keeping all other security gates. Mathematical Analysis is free and unlimited in public mode; AI review is free within its daily allowance. Neither mode adds accounts or payments. These source changes are not claimed deployed. See [public-release configuration and staging steps](docs/public-launch.md). In private mode, authentication checks the existing Basic credentials in both middleware and the paid AI handler. Pages use a fresh CSP script nonce and dynamic rendering; security headers also cover API errors and static assets. Missing authentication configuration fails closed. See [security headers, CSP compatibility and the future account-free public-launch transition](docs/security-hardening.md).
+
+### Server mathematical verification
+
+The AI API replays pot, stack and action arithmetic from validated inputs and independently enumerates equity within a bounded server budget. Client simulations are never authoritative; expensive or interrupted equity calculations are explicitly unknown, and dependent Call EV is withheld. The AI review displays the returned server facts. See [the mathematical trust boundary, computation limits and compatibility notes](docs/mathematical-verification.md).
+
+### AI request protection
+
+The AI endpoint requires `Content-Type: application/json` (including valid parameters such as `charset=utf-8`). Unsupported media types return 415. Untrusted or malformed origins and unsafe Fetch Metadata return 403 before the body is read, Redis quota is consumed, or the AI provider is called. Misconfigured trusted origins fail closed with 503.
+
+Origins must match the framework request URL or an exact entry in the optional server-side `AI_TRUSTED_ORIGINS` setting. Cross-site Fetch Metadata is rejected even for an allowlisted origin. No CORS permission is granted. A trusted origin entry does not enable a separate cross-origin browser frontend.
+
+Direct deployments, including Vercel, use the request URL origin. If a reverse proxy presents an internal URL to Next.js, configure its external HTTP(S) origin explicitly, for example `AI_TRUSTED_ORIGINS=https://poker.example.com`. Multiple entries are comma-separated (maximum 16). Do not use paths, trailing slashes, credentials, wildcard subdomains, or an unrestricted `*.vercel.app` pattern. Add only aliases you control; remove retired preview origins. Invalid entries disable AI requests until corrected.
+
+For local development, Next.js normalizes loopback addresses to `localhost`. Use the matching `http://localhost:<port>` URL, or explicitly add the exact `http://127.0.0.1:<port>` origin to `AI_TRUSTED_ORIGINS` when accessing the app through that address. Different ports are different origins.
+
+Request-origin validation does not derive trust from `Host`, `Forwarded`, or `X-Forwarded-*` headers. The hosting platform or trusted ingress must construct the framework request URL safely, replace untrusted forwarding headers, and preserve `Origin`, Fetch Metadata, and `Content-Type`. An allowlist cannot repair an incorrectly configured proxy trust boundary.
+
+Same-origin browser requests may omit `Origin`. Non-browser clients may omit both `Origin` and Fetch Metadata, but must still send JSON and pass the existing Basic Authentication gate. This fallback relies on JSON being a non-safelisted browser media type and on CORS remaining disabled; Basic credentials alone never bypass the header checks. Requests identifying themselves as same-site need an explicit allowed origin. Navigation, `no-cors`, incomplete Fetch Metadata, and ambiguous header values are rejected.
 
 ## Technical architecture
 
@@ -108,15 +134,17 @@ flowchart LR
     Browser[Browser UI<br/>Next.js and React] --> Math[Poker engine<br/>hand evaluation, ranges, equity, pot odds, EV]
     Browser -->|User-requested review| Gate[Server access gate]
     Gate --> Validate[Input validation]
-    Validate --> Limit[Shared usage controls]
-    Limit --> Provider[Server-side AI provider]
+    Validate --> Replay[Action and deterministic math replay]
+    Replay --> Limit[Shared usage controls]
+    Limit --> Equity[Bounded server equity verification]
+    Equity --> Provider[Server-side AI provider]
     Provider --> Schema[Structured response validation]
     Schema --> Browser
     Limit --> Redis[(Upstash Redis)]
     Provider --> OpenAI[OpenAI Responses API]
 ~~~
 
-The browser owns hand entry and deterministic calculations. The server handles AI requests, protects provider credentials, enforces request checks and shared usage controls, and validates the structured response before returning it to the UI.
+The browser handles hand entry and local mathematical previews. The server authenticates AI requests, validates their origin and inputs, independently verifies mathematical facts, protects provider credentials, enforces shared usage controls, and validates the structured response before returning it to the UI.
 
 ## Engineering highlights
 
@@ -128,19 +156,29 @@ The browser owns hand entry and deterministic calculations. The server handles A
 - **Safe server boundaries:** AI and Redis credentials stay server-side. Production AI analysis uses shared rate limiting and fails closed if that control is unavailable.
 - **Testable provider integration:** automated tests use a mocked provider and do not require paid API calls.
 
-The deployed project currently has a temporary HTTP Basic Authentication access gate. These protections are useful controls for the current deployment, not a replacement for accounts, identity-based quotas, or a formal security review.
+The current source retains a temporary HTTP Basic Authentication access gate. These protections support the current private deployment. A future account-free launch still requires abuse/cost controls and a review of the deployment trust boundary.
+
+## Privacy and usage boundaries
+
+Local mathematical previews run in the browser. An explicit AI-review request sends the supplied hand, board, ranges, actions, stack assumptions and opponent context through the server to OpenAI. Do not include personal identifiers or confidential hand data. The application adds no accounts, analytics or persistent hand-history storage; browser localStorage stores the language preference. Redis stores expiring rate counters keyed by an HMAC-derived IP identifier and UTC day, not hand histories. Hosting and service providers may retain operational metadata under their own policies. Existing Google Fonts requests remain an external browser dependency.
+
+Production AI review is limited to **5 validated admissions per IP per UTC day and 100 globally per UTC day**, with Redis failure blocking analysis. The current local source requires an explicit Vercel ingress policy and one normalized platform client IP, with no arbitrary forwarding fallback; see [trust assumptions and staging verification](docs/trusted-client-ip.md). These changes are not claimed deployed. Shared IPs can share a quota; origin checks are not bot authentication. See [deployment security boundaries](docs/security-hardening.md).
+
+## CI and security maintenance
+
+The prepared GitHub workflow uses Node.js 22 and runs tests, lint, typecheck, build and `npm audit --omit=dev --audit-level=high` on pushes/PRs to `main`. Weekly Dependabot PRs require review; updates are not auto-merged. Automation is inactive until these files are intentionally published. See [manual GitHub setup and CI risks](docs/github-security-maintenance.md) and [responsible vulnerability reporting](SECURITY.md).
 
 ## Getting started
 
 ### Requirements
 
-- Node.js 20 or later
+- Node.js 22 (the CI runtime)
 - npm
 
 ### Install and run
 
 ~~~bash
-npm install
+npm ci
 cp .env.example .env.local
 ~~~
 
@@ -160,7 +198,10 @@ Open [http://localhost:3000](http://localhost:3000). At the local access prompt,
 | OPENAI_MODEL | Optional | Model selection; defaults to gpt-5.6-terra. |
 | UPSTASH_REDIS_REST_URL | Production AI review | Shared Redis REST endpoint used by production usage controls. |
 | UPSTASH_REDIS_REST_TOKEN | Production AI review | Server-side credential for the shared Redis limiter. |
-| DEPLOYMENT_ACCESS_SECRET | App access | Server-side secret required by the temporary access gate. |
+| AI_CLIENT_IP_POLICY | Vercel AI review | Exactly `vercel`; requires exposed platform runtime markers and verified managed ingress. Local dev/test may leave unset or use `local`. |
+| AI_TRUSTED_ORIGINS | Optional | Exact additional external origins for a trusted reverse proxy; comma-separated, without wildcards. |
+| APPLICATION_ACCESS_MODE | Access policy | Unset/private requires Basic; explicit public enables no-login access. Invalid values fail closed. |
+| DEPLOYMENT_ACCESS_SECRET | Private app access | Server-side secret required by the temporary access gate. |
 
 The example environment file contains placeholders only. Configure production values in the hosting provider’s server-side environment settings. Never commit .env.local or expose credentials in browser code, screenshots, logs, or support material.
 
@@ -174,6 +215,10 @@ npm run build
 ~~~
 
 Tests use Node’s built-in test runner. They cover hand rankings and equity, ties and edge cases, ranges and blockers, action and stack state, request validation, language handling, structured response validation, and rate limiting. AI provider calls are mocked.
+
+### Deployment status
+
+Tasks 1–4 security changes and this CI configuration are local working-tree changes. They have not been committed, pushed or deployed as part of this work. Live deployment behavior and GitHub security settings have not been verified; do not assume an existing deployment includes these protections.
 
 ### Deployment overview
 
@@ -200,7 +245,7 @@ The access gate is temporary preview protection, not a complete account system. 
 
 ### Possible next steps
 
-- Add durable accounts and user-level usage controls.
+- Prepare an intentional account-free public launch with reviewed abuse and cost controls.
 - Support weighted ranges and more game formats.
 - Extend the mathematical model with rake, multiway pots, and tournament ICM.
 

@@ -1,4 +1,7 @@
+import { getApplicationAccessMode } from './lib/deployment-policy';
 import { NextResponse, type NextRequest } from 'next/server';
+import { documentSecurityHeaders, API_SECURITY_HEADERS } from './lib/security-headers';
+import { BASIC_AUTH_CHALLENGE } from './lib/analyze-access';
 import { checkDeploymentAccess } from './lib/deployment-access';
 
 function isApiRequest(pathname: string): boolean {
@@ -6,21 +9,35 @@ function isApiRequest(pathname: string): boolean {
 }
 
 export async function middleware(request: NextRequest): Promise<NextResponse> {
-  const decision = await checkDeploymentAccess(
-    request.headers.get('authorization'),
-    process.env.DEPLOYMENT_ACCESS_SECRET,
-  );
-  if (decision === 'authorized') return NextResponse.next();
+  let decision: 'authorized' | 'unauthorized' | 'misconfigured';
+  try {
+    decision = getApplicationAccessMode() === 'public' ? 'authorized' : await checkDeploymentAccess(
+      request.headers.get('authorization'), process.env.DEPLOYMENT_ACCESS_SECRET,
+    );
+  } catch { decision = 'misconfigured'; }
+  const api = isApiRequest(request.nextUrl.pathname);
+  if (decision === 'authorized') {
+    // Replace any client-supplied CSP/nonce metadata. Nonces must never come from the caller.
+    const nonce = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
+    const securityHeaders = api ? API_SECURITY_HEADERS : documentSecurityHeaders(nonce);
+    const forwardedHeaders = new Headers(request.headers);
+    forwardedHeaders.delete('x-nonce');
+    forwardedHeaders.delete('content-security-policy-report-only');
+    forwardedHeaders.set('content-security-policy', securityHeaders['Content-Security-Policy']);
+    const response = NextResponse.next({ request: { headers: forwardedHeaders } });
+    for (const [name, value] of Object.entries(securityHeaders)) response.headers.set(name, value);
+    response.headers.set('Cache-Control', 'private, no-store');
+    return response;
+  }
 
   const status = decision === 'misconfigured' ? 503 : 401;
-  const api = isApiRequest(request.nextUrl.pathname);
   const headers = new Headers({
     'Cache-Control': 'no-store',
-    'X-Content-Type-Options': 'nosniff',
+    ...API_SECURITY_HEADERS,
   });
 
   if (decision === 'unauthorized') {
-    headers.set('WWW-Authenticate', 'Basic realm="Poker Hand Analyzer Preview", charset="UTF-8"');
+    headers.set('WWW-Authenticate', BASIC_AUTH_CHALLENGE);
   }
 
   if (api) {

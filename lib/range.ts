@@ -81,9 +81,10 @@ const yieldToBrowser = () => new Promise<void>((resolve) => setTimeout(resolve, 
 /** Every legal physical combo has equal weight; exhaustive combo/runout evaluation is preferred under the shared case limit. */
 export async function calculateRangeEquity(
   hero: Card[], board: Card[], range: Iterable<RangeHandKey>,
-  options: { samples?: number; blockers?: Card[]; knownVillain?: Card[]; onProgress?: (progress: number) => void; shouldCancel?: () => boolean; rng?: () => number; exactCaseLimit?: number } = {},
+  options: { yieldEvery?: number; samples?: number; blockers?: Card[]; knownVillain?: Card[]; onProgress?: (progress: number) => void; shouldCancel?: () => boolean; rng?: () => number; exactCaseLimit?: number } = {},
 ): Promise<RangeEquityResult> {
-  const { samples = 8000, blockers = [], knownVillain = [], onProgress, shouldCancel, rng: sourceRng = Math.random, exactCaseLimit = MAX_EXACT_EQUITY_CASES } = options;
+  const { yieldEvery = 2400, samples = 8000, blockers = [], knownVillain = [], onProgress, shouldCancel, rng: sourceRng = Math.random, exactCaseLimit = MAX_EXACT_EQUITY_CASES } = options;
+  if (!Number.isInteger(yieldEvery) || yieldEvery < 1) throw new RangeError('Yield interval must be a positive integer.');
   const rng = () => { const value = sourceRng(); if (!Number.isFinite(value) || value < 0 || value >= 1) throw new RangeError('Random generator must return a value in [0, 1).'); return value; };
   validateEquityInput(hero, board, knownVillain);
   validateEquityInput(hero, board, [...blockers, ...knownVillain]);
@@ -113,7 +114,7 @@ export async function calculateRangeEquity(
         for (let i = start; i <= runoutDeck.length - (missingBoard - runout.length); i++) { runout.push(runoutDeck[i]); visit(i + 1); runout.pop(); }
       };
       visit(0); sinceYield += runoutsPerCombo;
-      if (sinceYield >= 2400) { sinceYield = 0; onProgress?.(index / combos.length); await yieldToBrowser(); }
+      if (sinceYield >= yieldEvery) { sinceYield = 0; onProgress?.(index / combos.length); await yieldToBrowser(); }
     }
     onProgress?.(1);
     return result(wins, ties, losses, total, 'exact');
