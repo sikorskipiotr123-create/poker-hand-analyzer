@@ -196,7 +196,7 @@ npm ci
 cp .env.example .env.local
 ~~~
 
-The example starts in private mode with AI disabled. Set a random `DEPLOYMENT_ACCESS_SECRET` before starting. Mathematical features work without an OpenAI key. To enable real AI reviews locally, configure `OPENAI_API_KEY` and `OPENAI_MODEL` and set `AI_ANALYSIS_DISABLED=false`; provider requests incur API costs. Keep credentials in the untracked `.env.local` file and never use a `NEXT_PUBLIC_` prefix for secrets.
+The example starts in private mode with AI disabled. Set a random `DEPLOYMENT_ACCESS_SECRET` before starting. Mathematical features work without an OpenAI key. To enable real AI reviews locally, configure `OPENAI_API_KEY` and `OPENAI_MODEL`, set `AI_CLIENT_IP_POLICY=local` for `npm run dev`, and set `AI_ANALYSIS_DISABLED=false`; provider requests incur API costs. Keep credentials in the untracked `.env.local` file and never use a `NEXT_PUBLIC_` prefix for secrets.
 
 ~~~bash
 npm run dev
@@ -210,7 +210,7 @@ Open [http://localhost:3000](http://localhost:3000). At the local access prompt,
 | --- | --- | --- |
 | OPENAI_API_KEY | AI review | Server-side credential for the OpenAI Responses API. |
 | OPENAI_MODEL | Optional | Server-side model selection; defaults to `gpt-5.6-terra`. |
-| AI_ANALYSIS_DISABLED | AI operating policy | `true` rejects AI requests before provider calls; the example keeps it enabled. Set `false` intentionally to enable reviews. |
+| AI_ANALYSIS_DISABLED | AI operating policy | `true` rejects AI requests before provider calls; the template sets `true` (AI disabled). Set `false` intentionally to enable reviews. |
 | AI_MAX_OUTPUT_TOKENS | Optional | Default output cap: 16,000 tokens, including reasoning tokens. |
 | AI_MAX_CONCURRENT_REQUESTS | Optional | Default shared AI concurrency limit: 3. |
 | UPSTASH_REDIS_REST_URL | Production AI review | Shared Redis REST endpoint used by production usage controls. |
