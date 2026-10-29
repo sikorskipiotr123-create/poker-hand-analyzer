@@ -69,6 +69,12 @@ function playerState(startingStackBb: number, totalContributionBb: number, stree
   return { startingStackBb, totalContributionBb, streetContributionBb, remainingStackBb, isAllIn: remainingStackBb <= EPSILON };
 }
 
+/** Betting ends once an all-in player has no unmatched wager left to resolve. */
+export function isAllInBettingComplete(state: Pick<ActionStateResult, 'players' | 'streetContributions'>): boolean {
+  return (state.players.hero.isAllIn || state.players.villain.isAllIn)
+    && Math.abs(state.streetContributions.hero - state.streetContributions.villain) <= EPSILON;
+}
+
 /** Deterministic replay. Bet/raise amounts are street-total targets; calls and All-in are stack-capped. */
 export function calculateActionState(
   actions: ActionDraft[],
@@ -110,12 +116,33 @@ export function calculateActionState(
     villain: playerState(startingStack('villain'), total.villain, streetContributions.villain),
   });
 
+  const returnUnmatched = (player: Player, amount: number) => {
+    streetContributions[player] -= amount;
+    total[player] -= amount;
+    potBb -= amount;
+  };
+  const allInComplete = () => isAllInBettingComplete({ players: players(), streetContributions });
+  // Forced blinds need no response when the shorter contributor is already exhausted.
+  const shorter: Player = streetContributions.hero < streetContributions.villain ? 'hero' : 'villain';
+  const larger: Player = shorter === 'hero' ? 'villain' : 'hero';
+  if (players()[shorter].isAllIn) {
+    returnUnmatched(larger, streetContributions[larger] - streetContributions[shorter]);
+  }
+
   actions.forEach((action, index) => {
     const errorCount = errors.length;
     const error = (message: string) => errors.push({ index, message });
     const normalized: ActionDraft = { ...action };
     if (foldedBy) { error('Nie można wykonać akcji po foldzie.'); normalizedActions.push(normalized); actionResolutions.push({ additionalContributionBb: 0, streetTotalBb: streetContributions[action.actor], allInKind: null, player: players()[action.actor] }); return; }
+    if (allInComplete()) { error('Zakłady są zakończone — wkłady gracza all-in zostały wyrównane.'); normalizedActions.push(normalized); actionResolutions.push({ additionalContributionBb: 0, streetTotalBb: streetContributions[action.actor], allInKind: null, player: players()[action.actor] }); return; }
     if (streetOrder[action.street] < streetOrder[street]) { error('Ulice muszą występować w kolejności: preflop, flop, turn, river.'); normalizedActions.push(normalized); actionResolutions.push({ additionalContributionBb: 0, streetTotalBb: streetContributions[action.actor], allInKind: null, player: players()[action.actor] }); return; }
+    if (action.street !== street && (players().hero.isAllIn || players().villain.isAllIn)
+      && Math.abs(streetContributions.hero - streetContributions.villain) > EPSILON) {
+      error('Nie można zmienić ulicy — zakład all-in wymaga call lub fold.');
+      normalizedActions.push(normalized);
+      actionResolutions.push({ additionalContributionBb: 0, streetTotalBb: streetContributions[action.actor], allInKind: null, player: players()[action.actor] });
+      return;
+    }
     if (action.street !== street) {
       street = action.street;
       streetContributions = { hero: 0, villain: 0 };
@@ -149,9 +176,7 @@ export function calculateActionState(
       if (added + EPSILON < due) {
         allInKind = 'call-all-in';
         const unmatched = due - added;
-        streetContributions[other] -= unmatched;
-        total[other] -= unmatched;
-        potBb -= unmatched;
+        returnUnmatched(other, unmatched);
       }
       streetTotalBb = streetContributions[action.actor];
     } else if (errors.length === errorCount && action.action === 'all_in') {
@@ -161,9 +186,7 @@ export function calculateActionState(
         allInKind = added <= due + EPSILON ? 'call-all-in' : 'raise-all-in';
         if (added + EPSILON < due) {
           const unmatched = due - added;
-          streetContributions[other] -= unmatched;
-          total[other] -= unmatched;
-          potBb -= unmatched;
+          returnUnmatched(other, unmatched);
         }
       } else allInKind = highest > EPSILON ? 'raise-all-in' : 'bet-all-in';
       streetContributions[action.actor] = streetTotalBb;
@@ -187,12 +210,17 @@ export function calculateActionState(
         }
       }
     }
-    if (errors.length === errorCount && action.action === 'fold') foldedBy = action.actor;
+    if (errors.length === errorCount && action.action === 'fold') {
+      foldedBy = action.actor;
+      // Return the winner's uncalled wager; the matched pot is not awarded here.
+      returnUnmatched(other, Math.max(0, streetContributions[other] - streetContributions[action.actor]));
+    }
     if (errors.length === errorCount && action.actor === 'villain' && ['bet', 'raise', 'all_in'].includes(action.action)) {
       const after = players();
       const heroDue = Math.max(0, streetContributions.villain - streetContributions.hero);
       const legalCall = Math.min(heroDue, after.hero.remainingStackBb);
-      const contestableOpponentBetBb = Math.min(added, legalCall);
+      // Only the unmatched excess is returned. A raise also matches earlier Hero chips.
+      const contestableOpponentBetBb = Math.max(0, added - Math.max(0, heroDue - legalCall));
       const finalContestablePotBb = potBb - Math.max(0, added - contestableOpponentBetBb) + legalCall;
       const currentEffectiveStackBb = Math.min(after.hero.remainingStackBb, after.villain.remainingStackBb);
       decisionPoint = {
@@ -218,7 +246,9 @@ export function calculateActionState(
     actionResolutions.push({ additionalContributionBb: added, streetTotalBb, allInKind, player: players()[action.actor] });
   });
   // The visible board may be ahead of the last recorded action; still expose SPR for its current postflop street.
-  if (streetOrder[throughStreet] > streetOrder[street]) {
+  if (streetOrder[throughStreet] > streetOrder[street]
+    && !((players().hero.isAllIn || players().villain.isAllIn)
+      && Math.abs(streetContributions.hero - streetContributions.villain) > EPSILON)) {
     street = throughStreet;
     streetContributions = { hero: 0, villain: 0 };
     streetStartPotBb = potBb;

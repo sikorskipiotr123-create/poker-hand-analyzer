@@ -1,14 +1,21 @@
+import { awaitWithSignal, createDeadline, throwIfCancelled } from './request-cancellation';
 import { createHmac } from 'node:crypto';
+import { isIP } from 'node:net';
 
 export const ANALYZE_RATE_LIMIT = 5;
 export const ANALYZE_RATE_WINDOW_SECONDS = 10 * 60;
 export const GLOBAL_ANALYZE_DAILY_LIMIT = 100;
+// Cheap abuse protection is separate from the unchanged validated-analysis quota.
+export const ANALYZE_ATTEMPT_IP_LIMIT = 20;
+export const ANALYZE_ATTEMPT_GLOBAL_LIMIT = 1_000;
 const RATE_WINDOW_MS = ANALYZE_RATE_WINDOW_SECONDS * 1000;
 const REDIS_TIMEOUT_MS = 2_000;
 
 export type RedisFailureCategory =
   | 'missing_environment_variable'
   | 'missing_client_ip'
+  | 'invalid_client_ip'
+  | 'untrusted_client_ingress'
   | 'invalid_redis_url'
   | 'redis_timeout'
   | 'redis_network_error'
@@ -33,7 +40,7 @@ function logRedisFailure(category: RedisFailureCategory, metadata: Record<string
   console.error(JSON.stringify({ event: 'upstash_rate_limiter_failure', category, ...metadata }));
 }
 
-function getRedisConfig(): RedisConfig {
+export function getRedisConfig(): RedisConfig {
   const restUrl = process.env.UPSTASH_REDIS_REST_URL?.trim();
   const restToken = process.env.UPSTASH_REDIS_REST_TOKEN?.trim();
   if (!restUrl || !restToken) {
@@ -48,41 +55,76 @@ function getRedisConfig(): RedisConfig {
   return { endpoint, token: restToken };
 }
 
-async function sendRedisCommand(config: RedisConfig, command: string[]): Promise<RedisCommandResult> {
-  let response: Response;
+export async function sendRedisCommand(config: RedisConfig, command: string[], signal?: AbortSignal): Promise<RedisCommandResult> {
+  const deadline = createDeadline(signal, REDIS_TIMEOUT_MS, 'redis');
   try {
-    response = await fetch(config.endpoint, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${config.token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(command),
-      signal: AbortSignal.timeout(REDIS_TIMEOUT_MS),
-      cache: 'no-store',
-    });
-  } catch (error) {
-    const name = error instanceof Error ? error.name : '';
-    throw new RedisRateLimitError(name === 'TimeoutError' || name === 'AbortError' ? 'redis_timeout' : 'redis_network_error');
-  }
+    deadline.check();
+    let response: Response;
+    try {
+      response = await awaitWithSignal(deadline.signal, () => fetch(config.endpoint, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${config.token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(command),
+        signal: deadline.signal,
+        cache: 'no-store',
+      }));
+      deadline.check();
+    } catch (error) {
+      const name = error instanceof Error ? error.name : '';
+      throw new RedisRateLimitError(name === 'TimeoutError' || name === 'AbortError' ? 'redis_timeout' : 'redis_network_error');
+    }
 
-  if (!response.ok) {
-    const category = response.status === 401 || response.status === 403 ? 'redis_http_401_403' : 'redis_http_other';
-    throw new RedisRateLimitError(category, response.status);
-  }
+    if (!response.ok) {
+      const category = response.status === 401 || response.status === 403 ? 'redis_http_401_403' : 'redis_http_other';
+      throw new RedisRateLimitError(category, response.status);
+    }
 
-  let payload: unknown;
-  try { payload = await response.json(); } catch (error) {
-    const name = error instanceof Error ? error.name : '';
-    const category = name === 'TimeoutError' || name === 'AbortError' ? 'redis_timeout' : 'malformed_redis_response';
-    throw new RedisRateLimitError(category, response.status);
-  }
-  if (!payload || typeof payload !== 'object' || !('result' in payload)) {
-    throw new RedisRateLimitError('malformed_redis_response', response.status);
-  }
-  return { result: payload.result, httpStatus: response.status };
+    let payload: unknown;
+    try { payload = await awaitWithSignal(deadline.signal, () => response.json()); deadline.check(); } catch (error) {
+      const name = error instanceof Error ? error.name : '';
+      const category = name === 'TimeoutError' || name === 'AbortError' ? 'redis_timeout' : 'malformed_redis_response';
+      throw new RedisRateLimitError(category, response.status);
+    }
+    if (!payload || typeof payload !== 'object' || !('result' in payload)) {
+      throw new RedisRateLimitError('malformed_redis_response', response.status);
+    }
+    return { result: payload.result, httpStatus: response.status };
+  } finally { deadline.dispose(); }
 }
 
-function clientAddress(request: Request): string | null {
-  const forwarded = request.headers.get('x-vercel-forwarded-for') ?? request.headers.get('x-forwarded-for') ?? request.headers.get('x-real-ip');
-  return forwarded?.split(',')[0]?.trim() || null;
+/** Canonicalize one bare address; never parse a proxy chain, port, zone or hostname. */
+export function normalizeClientIP(value: string): string | null {
+  if (value.length > 45 || !/^[0-9a-fA-F:.]+$/.test(value)) return null;
+  const family = isIP(value);
+  if (family === 4) return value;
+  if (family !== 6) return null;
+  // WHATWG serialization compresses/lowercases IPv6, including embedded IPv4.
+  const canonical = new URL(`http://[${value}]/`).hostname.slice(1, -1);
+  const mapped = /^::ffff:([a-f0-9]+):([a-f0-9]+)$/.exec(canonical);
+  if (mapped) {
+    const high = parseInt(mapped[1], 16), low = parseInt(mapped[2], 16);
+    return `${high >>> 8}.${high & 255}.${low >>> 8}.${low & 255}`;
+  }
+  return canonical;
+}
+
+/** Server configuration attests to ingress, not request headers. See docs/trusted-client-ip.md. */
+export function trustedClientAddress(request: Request): string {
+  if (process.env.AI_CLIENT_IP_POLICY !== 'vercel' || process.env.VERCEL !== '1' ||
+      !['production', 'preview'].includes(process.env.VERCEL_ENV ?? '')) {
+    throw new RedisRateLimitError('untrusted_client_ingress');
+  }
+  const value = request.headers.get('x-vercel-forwarded-for');
+  if (!value) throw new RedisRateLimitError('missing_client_ip');
+  const address = normalizeClientIP(value);
+  if (!address) throw new RedisRateLimitError('invalid_client_ip');
+  return address;
+}
+
+function isLocalDevelopment(): boolean {
+  return (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test') &&
+    process.env.VERCEL === undefined && process.env.VERCEL_ENV === undefined &&
+    (process.env.AI_CLIENT_IP_POLICY === undefined || process.env.AI_CLIENT_IP_POLICY === 'local');
 }
 
 function addressDigest(address: string, secret: string): string {
@@ -110,24 +152,19 @@ export function createInMemoryRateLimiter(limit = ANALYZE_RATE_LIMIT, windowMs =
   };
 }
 
-const localLimiter = createInMemoryRateLimiter();
+const localLimiter = createInMemoryRateLimiter(ANALYZE_RATE_LIMIT, 86400 * 1000);
+const localAttemptLimiter = createInMemoryRateLimiter(ANALYZE_ATTEMPT_IP_LIMIT);
 
 function retrySecondsUntilNextIpWindow(now: number): number {
   const nextWindow = (Math.floor(now / RATE_WINDOW_MS) + 1) * RATE_WINDOW_MS;
   return Math.max(1, Math.ceil((nextWindow - now) / 1000));
 }
 
-function getUtcDayWindow(now: number): { day: string; nextMidnightMs: number } {
-  const date = new Date(now);
-  const nextMidnightMs = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + 1);
-  return { day: date.toISOString().slice(0, 10), nextMidnightMs };
-}
-
 function isSafeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
-/** Redis executes each EVAL atomically, so IP and daily counters are checked and updated together. */
+/** Attempt counters are admitted together; this script never touches analysis quotas. */
 export const ATOMIC_RATE_LIMIT_SCRIPT = `
 local values = redis.call('MGET', KEYS[1], KEYS[2])
 local function parseCounter(value)
@@ -154,61 +191,114 @@ if dailyCount == 1 then redis.call('EXPIREAT', KEYS[2], dailyExpiry) end
 return {0, ipCount, dailyCount}
 `;
 
+/** Redis TIME is authoritative. Stable hash keys avoid a midnight key-selection race. */
+export const ATOMIC_DAILY_ANALYSIS_SCRIPT = `
+local now = tonumber(redis.call('TIME')[1])
+local day = math.floor(now / 86400)
+local reset = (day + 1) * 86400
+local function count(key)
+  local fields = redis.call('HMGET', key, 'day', 'count')
+  if not fields[1] and not fields[2] then return 0 end
+  if not fields[1] or not fields[2] then return nil end
+  if not string.match(fields[1], '^%d+$') or not string.match(fields[2], '^%d+$') then return nil end
+  local storedDay, value = tonumber(fields[1]), tonumber(fields[2])
+  if storedDay > day or value > 9007199254740991 then return nil end
+  if storedDay < day then return 0 end
+  return value
+end
+local ip, global = count(KEYS[1]), count(KEYS[2])
+if ip == nil or global == nil then return {-1, 0, 0, now, reset} end
+if ip >= 5 then return {1, ip, global, now, reset} end
+if global >= 100 then return {2, ip, global, now, reset} end
+ip, global = ip + 1, global + 1
+redis.call('HSET', KEYS[1], 'day', day, 'count', ip)
+redis.call('EXPIREAT', KEYS[1], reset + 2)
+redis.call('HSET', KEYS[2], 'day', day, 'count', global)
+redis.call('EXPIREAT', KEYS[2], reset + 2)
+return {0, ip, global, now, reset}
+`;
+
+async function checkDailyAdmission(address: string, config: RedisConfig, signal?: AbortSignal): Promise<RateLimitDecision> {
+  const { result, httpStatus } = await sendRedisCommand(config, [
+    'EVAL', ATOMIC_DAILY_ANALYSIS_SCRIPT, '2',
+    `poker-analyze:daily:ip:v2:${addressDigest(address, config.token)}`,
+    'poker-analyze:daily:global:v2',
+  ], signal);
+  throwIfCancelled(signal);
+  if (!Array.isArray(result) || result.length !== 5) throw new RedisRateLimitError('malformed_redis_response', httpStatus);
+  const [code, ip, global, now, reset] = result;
+  if (!Number.isInteger(code) || ![ip, global, now, reset].every(isSafeInteger) || now > 8_639_999_913_600 || reset !== (Math.floor(now / 86400) + 1) * 86400) invalidLuaResult(httpStatus);
+  if (code === 0 && ip >= 1 && ip <= 5 && global >= 1 && global <= 100) return { status: 'allowed' };
+  const retryAfterSeconds = reset - now;
+  const resetAt = new Date(reset * 1000).toISOString();
+  if (code === 1 && ip >= 5 && global <= 100) return { status: 'limited', scope: 'ip', retryAfterSeconds, resetAt };
+  if (code === 2 && ip < 5 && global >= 100) return { status: 'limited', scope: 'global', retryAfterSeconds, resetAt };
+  invalidLuaResult(httpStatus);
+}
+
 export type RateLimitDecision =
   | { status: 'allowed' }
-  | { status: 'limited'; scope: 'ip' | 'global'; retryAfterSeconds: number }
+  | { status: 'limited'; scope: 'ip' | 'global'; retryAfterSeconds: number; resetAt?: string }
   | { status: 'unavailable' };
 
 function invalidLuaResult(httpStatus?: number): never {
   throw new RedisRateLimitError('invalid_lua_result', httpStatus);
 }
 
-async function checkSharedRateLimit(address: string, config: RedisConfig, now: number): Promise<RateLimitDecision> {
+async function checkSharedAttemptLimit(address: string, config: RedisConfig, now: number, signal?: AbortSignal): Promise<RateLimitDecision> {
+  const ipLimit = ANALYZE_ATTEMPT_IP_LIMIT;
+  const globalLimit = ANALYZE_ATTEMPT_GLOBAL_LIMIT;
   const ipWindow = Math.floor(now / RATE_WINDOW_MS);
-  const { day, nextMidnightMs } = getUtcDayWindow(now);
-  const ipKey = `poker-analyze:ip:${addressDigest(address, config.token)}:${ipWindow}`;
-  const dailyKey = `poker-analyze:global:${day}`;
+  const ipKey = `poker-analyze:attempt:ip:v1:${addressDigest(address, config.token)}:${ipWindow}`;
+  const dailyKey = `poker-analyze:attempt:global:v1:${ipWindow}`;
   const ipRetryAfter = retrySecondsUntilNextIpWindow(now);
-  const dailyRetryAfter = Math.max(1, Math.ceil((nextMidnightMs - now) / 1000));
-  const dailyExpiry = Math.floor(nextMidnightMs / 1000) + 2;
+  const dailyRetryAfter = ipRetryAfter;
+  const dailyExpiry = Math.floor((ipWindow + 1) * RATE_WINDOW_MS / 1000) + 2;
   const { result, httpStatus } = await sendRedisCommand(config, [
     'EVAL', ATOMIC_RATE_LIMIT_SCRIPT, '2', ipKey, dailyKey,
-    String(ANALYZE_RATE_LIMIT), String(ANALYZE_RATE_WINDOW_SECONDS + 2),
-    String(GLOBAL_ANALYZE_DAILY_LIMIT), String(dailyExpiry),
-  ]);
+    String(ipLimit), String(ANALYZE_RATE_WINDOW_SECONDS + 2),
+    String(globalLimit), String(dailyExpiry),
+  ], signal);
+  throwIfCancelled(signal);
   if (!Array.isArray(result) || result.length !== 3) throw new RedisRateLimitError('malformed_redis_response', httpStatus);
   const [code, ipCount, dailyCount] = result;
   if (!Number.isInteger(code) || !isSafeInteger(ipCount) || !isSafeInteger(dailyCount)) invalidLuaResult(httpStatus);
   if (code === -1) invalidLuaResult(httpStatus);
   if (code === 0) {
-    if (ipCount < 1 || ipCount > ANALYZE_RATE_LIMIT || dailyCount < 1 || dailyCount > GLOBAL_ANALYZE_DAILY_LIMIT) invalidLuaResult(httpStatus);
+    if (ipCount < 1 || ipCount > ipLimit || dailyCount < 1 || dailyCount > globalLimit) invalidLuaResult(httpStatus);
     return { status: 'allowed' };
   }
   if (code === 1) {
-    if (ipCount < ANALYZE_RATE_LIMIT || dailyCount > GLOBAL_ANALYZE_DAILY_LIMIT) invalidLuaResult(httpStatus);
+    if (ipCount < ipLimit || dailyCount > globalLimit) invalidLuaResult(httpStatus);
     return { status: 'limited', scope: 'ip', retryAfterSeconds: ipRetryAfter };
   }
   if (code === 2) {
-    if (ipCount >= ANALYZE_RATE_LIMIT || dailyCount < GLOBAL_ANALYZE_DAILY_LIMIT) invalidLuaResult(httpStatus);
+    if (ipCount >= ipLimit || dailyCount < globalLimit) invalidLuaResult(httpStatus);
     return { status: 'limited', scope: 'global', retryAfterSeconds: dailyRetryAfter };
   }
   invalidLuaResult(httpStatus);
 }
 
-/** Production calls fail closed unless shared Upstash limits are configured; local dev uses a process-local IP bucket. */
-export async function checkAnalyzeRateLimit(request: Request): Promise<RateLimitDecision> {
-  const address = clientAddress(request);
-  if (process.env.NODE_ENV === 'production') {
+/** Only explicitly local dev/test uses a single local bucket; every deployment fails closed. */
+async function checkLimit(request: Request, signal?: AbortSignal, attempts = false): Promise<RateLimitDecision> {
+  throwIfCancelled(signal);
+  if (!isLocalDevelopment()) {
     try {
-      if (!address) throw new RedisRateLimitError('missing_client_ip');
+      const address = trustedClientAddress(request);
       const config = getRedisConfig();
-      return await checkSharedRateLimit(address, config, Date.now());
+      return attempts ? await checkSharedAttemptLimit(address, config, Date.now(), signal) : await checkDailyAdmission(address, config, signal);
     } catch (error) {
+      throwIfCancelled(signal);
       const category = error instanceof RedisRateLimitError ? error.category : 'redis_network_error';
       logRedisFailure(category, error instanceof RedisRateLimitError && error.httpStatus ? { httpStatus: error.httpStatus } : {});
       return { status: 'unavailable' };
     }
   }
-  if (!address) return { status: 'allowed' };
-  return localLimiter(addressDigest(address, 'poker-analyzer-local-rate-limit'));
+  // Local-only convenience: ignore ALL request IP headers; never allow an unlimited missing-IP path.
+  return (attempts ? localAttemptLimiter : localLimiter)(addressDigest('local-development', 'poker-analyzer-local-rate-limit'));
 }
+
+/** Cheap pre-body/verification attempt protection; never touches analysis quota keys. */
+export const checkAnalyzeAttemptLimit = (request: Request, signal?: AbortSignal): Promise<RateLimitDecision> => checkLimit(request, signal, true);
+/** Atomically admits fully validated analyses immediately before provider dispatch; no refunds. */
+export const checkAnalyzeRateLimit = (request: Request, signal?: AbortSignal): Promise<RateLimitDecision> => checkLimit(request, signal);

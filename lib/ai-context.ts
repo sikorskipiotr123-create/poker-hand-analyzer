@@ -26,13 +26,14 @@ export function createAnalysisRange(mode: AnalysisRangeMode, selectedHands: Rang
 
 export type EquityFact =
   | { status: 'known'; value: number; source: 'known-hand' | 'custom-range'; villainEquity: number; tiePercent: number; method: EquityMethod; evaluatedCases: number }
-  | { status: 'unknown'; reason: 'auto-range' | 'missing-cards' | 'invalid-input' };
+  | { status: 'unknown'; reason: 'auto-range' | 'missing-cards' | 'invalid-input' | 'verification-limit' | 'verification-busy' | 'verification-timeout' };
 export type CallEVFact =
   | { status: 'known'; value: number }
   | { status: 'unknown'; reason: 'equity-unknown' | 'no-active-call' };
 export type MathematicalContext = { equity: EquityFact; requiredEquity: number; callEV: CallEVFact };
 export type AIAnalysisContext = {
   language: AppLanguage;
+  blinds: { smallBlindBb: number; bigBlindBb: number };
   hero: { cards: string[]; position: Position; range: AnalysisRange };
   villain: { cards: string[]; position: Position; profile: OpponentProfile; stats: OpponentStats; range: AnalysisRange };
   board: string[];

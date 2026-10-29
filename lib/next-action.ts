@@ -1,5 +1,5 @@
 import type { ActionDraft, ActionType, Position, Street } from './ai-context';
-import { calculateActionState, type ActionStateResult, type BlindConfig, type Player, type StartingStacks } from './action-state';
+import { calculateActionState, isAllInBettingComplete, type ActionStateResult, type BlindConfig, type Player, type StartingStacks } from './action-state';
 
 export type NextActionSuggestion = {
   player: 'hero' | 'villain' | null;
@@ -19,7 +19,7 @@ export function getNextStreet(street: Street): Street | null { return streetNext
 
 /** Legal UI choices are derived from the replay immediately before the selected action. */
 export function getLegalActions(state: ActionStateResult, player: Player): ActionType[] {
-  if (state.errors.length || state.players[player].isAllIn) return [];
+  if (state.errors.length || state.players[player].isAllIn || isAllInBettingComplete(state) || state.normalizedActions.some(action => action.action === 'fold')) return [];
   const other: Player = player === 'hero' ? 'villain' : 'hero';
   const current = state.players[player];
   const opponent = state.players[other];
@@ -66,7 +66,7 @@ export function suggestNextAction(
 
   if (replay.errors.length) return none(currentStreet, 'invalid');
   if (actions.some((action) => action.action === 'fold')) return none(currentStreet, 'fold');
-  if (replay.players.hero.isAllIn && replay.players.villain.isAllIn) return none(currentStreet, 'all-in');
+  if (isAllInBettingComplete(replay)) return none(currentStreet, 'all-in', true);
 
   const streetActions = actions.filter((action) => action.street === currentStreet);
   const last = streetActions.at(-1);
@@ -121,7 +121,7 @@ export function suggestNextAction(
   // Advance exactly one street, then replay there so its first action uses the same stacks/pot.
   const nextState = calculateActionState(actions, positions, blinds, stacks, followingStreet);
   if (nextState.errors.length) return none(currentStreet, 'invalid');
-  if (nextState.players.hero.isAllIn && nextState.players.villain.isAllIn) return none(followingStreet, 'all-in', true);
+  if (isAllInBettingComplete(nextState)) return none(followingStreet, 'all-in', true);
 
   let first = firstPlayer(followingStreet, positions);
   if (nextState.players[first].isAllIn) first = first === 'hero' ? 'villain' : 'hero';

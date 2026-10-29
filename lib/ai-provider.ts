@@ -1,7 +1,9 @@
+import { AICostConfigurationError, getAICostPolicy } from './ai-cost-controls';
+import { awaitWithSignal, throwIfCancelled } from './request-cancellation';
 import { AI_ANALYSIS_JSON_SCHEMA } from './ai-response';
 import type { PromptParts } from './ai-analysis';
 
-export type AnalysisServiceErrorCode = 'not_configured' | 'configuration_error' | 'billing_quota' | 'timeout' | 'network_error' | 'provider_error' | 'malformed_response';
+export type AnalysisServiceErrorCode = 'ai_disabled' | 'ai_limits_configuration_error' | 'not_configured' | 'configuration_error' | 'billing_quota' | 'timeout' | 'network_error' | 'provider_error' | 'malformed_response';
 export class AnalysisServiceError extends Error {
   constructor(readonly code: AnalysisServiceErrorCode) { super(code); this.name = 'AnalysisServiceError'; }
 }
@@ -74,12 +76,19 @@ export type ProviderResponseObserver = (diagnostics: ProviderResponseDiagnostics
 
 /** OpenAI Responses API adapter. Secrets and model configuration never enter client code. */
 export async function requestOpenAIAnalysis(prompt: PromptParts, signal: AbortSignal, observeResponse?: ProviderResponseObserver): Promise<unknown> {
+  throwIfCancelled(signal);
+  let policy;
+  try { policy = getAICostPolicy(); } catch (error) {
+    if (error instanceof AICostConfigurationError) throw new AnalysisServiceError('ai_limits_configuration_error');
+    throw error;
+  }
+  if (policy.disabled) throw new AnalysisServiceError('ai_disabled');
   const { apiKey, model } = getAIConfiguration();
   if (!apiKey) throw new AnalysisServiceError('not_configured');
   const requestStartedAt = Date.now();
   let response: Response;
   try {
-    response = await fetch('https://api.openai.com/v1/responses', {
+    response = await awaitWithSignal(signal, () => fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
       signal,
@@ -87,7 +96,7 @@ export async function requestOpenAIAnalysis(prompt: PromptParts, signal: AbortSi
         model,
         store: false,
         // The cap includes hidden reasoning tokens, so leave room for the full JSON review.
-        max_output_tokens: 25_000,
+        max_output_tokens: policy.maxOutputTokens,
         reasoning: { effort: 'low' },
         input: [
           { role: 'system', content: [{ type: 'input_text', text: prompt.system }] },
@@ -95,8 +104,10 @@ export async function requestOpenAIAnalysis(prompt: PromptParts, signal: AbortSi
         ],
         text: { format: { type: 'json_schema', name: 'poker_hand_review', strict: true, schema: AI_ANALYSIS_JSON_SCHEMA } },
       }),
-    });
+    }));
+    throwIfCancelled(signal);
   } catch (error) {
+    throwIfCancelled(signal);
     const errorName = error instanceof Error ? error.name : 'UnknownError';
     console.error('[OpenAI Responses API] network request failed', { errorName, aborted: signal.aborted, elapsedMs: Date.now() - requestStartedAt, timeoutSource: signal.aborted ? 'application_provider_deadline' : errorName === 'TimeoutError' ? 'provider_transport' : 'network_connection' });
     if (signal.aborted || (error instanceof Error && error.name === 'AbortError')) throw new AnalysisServiceError('timeout');
@@ -106,9 +117,10 @@ export async function requestOpenAIAnalysis(prompt: PromptParts, signal: AbortSi
     // Log only provider status metadata. Never log request headers, request bodies, or credentials.
     let providerError: Record<string, unknown> = {};
     try {
-      const payload: unknown = await response.clone().json();
+      const payload: unknown = await awaitWithSignal(signal, () => response.json());
+      throwIfCancelled(signal);
       if (isObject(payload) && isObject(payload.error)) providerError = payload.error;
-    } catch { /* Some upstream failures return no JSON body. */ }
+    } catch { throwIfCancelled(signal); /* Some upstream failures return no JSON body. */ }
     console.error('[OpenAI Responses API] request rejected', {
       status: response.status,
       elapsedMs: Date.now() - requestStartedAt,
@@ -124,7 +136,8 @@ export async function requestOpenAIAnalysis(prompt: PromptParts, signal: AbortSi
   }
 
   let payload: unknown;
-  try { payload = await response.json(); } catch {
+  try { payload = await awaitWithSignal(signal, () => response.json()); throwIfCancelled(signal); } catch {
+    throwIfCancelled(signal);
     logMalformedResponse('invalid_provider_json', {
       httpStatus: response.status,
       responseStatus: 'unknown',
@@ -159,6 +172,7 @@ export async function requestOpenAIAnalysis(prompt: PromptParts, signal: AbortSi
     throw new AnalysisServiceError('malformed_response');
   }
 
+  throwIfCancelled(signal);
   observeResponse?.(diagnostics);
   console.info('[OpenAI Responses API] response completed', {
     httpStatus: diagnostics.httpStatus,

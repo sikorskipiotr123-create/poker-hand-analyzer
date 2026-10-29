@@ -1,3 +1,4 @@
+import type { HandValidationError } from './analysis-validation';
 export type AppLanguage = 'pl' | 'en';
 export const DEFAULT_APP_LANGUAGE: AppLanguage = 'pl';
 export const LANGUAGE_STORAGE_KEY = 'poker-hand-analyzer-language';
@@ -61,7 +62,7 @@ const pl = {
   actualHandNotIncluded: 'Rzeczywista ręka Hero ({{hand}}) nie należy do wybranego zakresu Hero.',
   editRangeMatrix: 'Edytuj macierz zakresu', customRangeDescription: 'Wybieraj klasy startowe. Zablokowane kombinacje nie są liczone, ale wybrane klasy pozostają zaznaczone.',
   emptyCustomRange: 'Wybrany zakres Custom jest pusty albo całkowicie zablokowany.',
-  handComplete: 'Brak dalszych akcji — rozdanie zakończone.', bothPlayersAllIn: 'Obaj gracze są all-in — dalsze zakłady są niemożliwe.', bettingRoundComplete: 'Runda licytacji zakończona.', roundCompleteAdvance: 'Runda licytacji zakończona. Następna akcja: {{street}}.',
+  handComplete: 'Brak dalszych akcji — rozdanie zakończone.', bothPlayersAllIn: 'Wkłady gracza all-in są wyrównane — dalsze zakłady są niemożliwe.', bettingRoundComplete: 'Runda licytacji zakończona.', roundCompleteAdvance: 'Runda licytacji zakończona. Następna akcja: {{street}}.',
   actionsSection: 'Historia akcji', actionAmountHelp: 'Kwoty betów i raise’ów oznaczają łączny wkład na danej ulicy, w bb.', addAction: '＋ Dodaj akcję',
   smallBlind: 'Small blind (bb)', bigBlind: 'Big blind (bb)', blindsAuto: 'Blindy są dodawane automatycznie na podstawie wybranych pozycji.',
   firstActionEmpty: 'Dodaj pierwszą akcję. Wpłaty blindów są już uwzględnione w puli.', street: 'Ulica', player: 'Gracz', action: 'Akcja',
@@ -76,9 +77,13 @@ const pl = {
   aiDisclaimer: 'AI interpretuje strategię. Equity, pot odds i EV pochodzą z deterministycznego silnika pokera.',
   aiRequestTitle: 'Nie udało się przygotować analizy', retry: 'Spróbuj ponownie',
   villainCardsOptional: 'Karty rywala są opcjonalne — wybierz obie albo wyczyść wybraną.', equityCalculationError: 'Nie udało się obliczyć equity.',
+  errorDeploymentAccess: 'Wymagana jest autoryzacja dostępu do wersji prywatnej. Odśwież stronę i zaloguj się przez monit przeglądarki.', errorDeploymentUnavailable: 'Dostęp do wersji prywatnej jest chwilowo niedostępny. Spróbuj ponownie później.',
+  errorMathVerification: 'Nie można teraz zweryfikować obliczeń. Spróbuj ponownie.', mathServerUnverified: 'serwer nie zweryfikował equity w dostępnym limicie obliczeń; wartość klienta nie jest używana', errorUnsupportedMediaType: 'Żądanie analizy musi mieć format JSON.', errorRequestOrigin: 'Żądanie analizy zostało zablokowane. Otwórz aplikację pod zaufanym adresem i spróbuj ponownie.', errorRequestSecurity: 'Ochrona żądań analizy jest chwilowo niedostępna. Spróbuj ponownie później.',
   errorNotConfigured: 'Analiza AI nie jest skonfigurowana. Dodaj klucz API w konfiguracji serwera, aby ją włączyć.', errorConfiguration: 'Konfiguracja modelu AI jest niedostępna. Sprawdź ustawienia serwera.', errorBillingQuota: 'Limit użycia lub rozliczeń usługi AI został osiągnięty.',
   errorInvalidInput: 'Dane analizy są nieprawidłowe. Sprawdź wprowadzone wartości.', errorInvalidHand: 'Dane rozdania są nieprawidłowe. Sprawdź karty, zakresy, stacki i wartości SPR.', errorInvalidActions: 'Historia akcji jest niespójna. Sprawdź kolejność akcji i ich kwoty.', errorInvalidRequest: 'Nie udało się odczytać danych analizy.', errorTooLarge: 'Dane analizy są zbyt obszerne.', errorTimeout: 'Analiza trwała zbyt długo. Spróbuj ponownie.',
-  errorProvider: 'Usługa AI jest chwilowo niedostępna. Spróbuj ponownie.', errorRateLimited: 'Wysłano zbyt wiele analiz AI. Poczekaj chwilę i spróbuj ponownie.', errorDailyLimitReached: 'Dzienny limit analiz AI został osiągnięty. Spróbuj ponownie po jego odnowieniu.', errorRateLimitUnavailable: 'Analiza AI jest chwilowo niedostępna. Spróbuj ponownie później.', errorMalformed: 'Usługa AI zwróciła nieczytelną analizę. Spróbuj ponownie.', errorConnection: 'Nie udało się połączyć z usługą AI. Sprawdź połączenie i spróbuj ponownie.', errorGeneric: 'Nie udało się przeanalizować rozdania. Spróbuj ponownie.',
+  aiDailyAllowance: 'Analiza matematyczna jest bezpłatna i bez limitu. Analiza AI jest bezpłatna: do 5 zweryfikowanych zgłoszeń na adres IP dziennie i 100 łącznie. Limity odnawiają się o 00:00 UTC.',
+  errorAIDisabled: 'Analiza AI jest chwilowo wstrzymana. Analiza matematyczna pozostaje dostępna.', errorAILimitsConfiguration: 'Analiza AI jest chwilowo niedostępna z powodu nieprawidłowej konfiguracji limitów.', errorAIBusy: 'Wszystkie miejsca analizy AI są zajęte. Spróbuj ponownie za chwilę.', errorAIConcurrencyUnavailable: 'Nie można teraz bezpiecznie uruchomić analizy AI. Spróbuj ponownie później.',
+  errorProvider: 'Usługa AI jest chwilowo niedostępna. Spróbuj ponownie.', errorRateLimited: 'Wysłano zbyt wiele analiz AI. Poczekaj chwilę i spróbuj ponownie.', errorIPDailyLimitReached: 'Osiągnięto dzienny limit 5 analiz AI dla tego adresu IP. Limit odnawia się o 00:00 UTC. Analiza matematyczna pozostaje bez limitu.', errorDailyLimitReached: 'Wspólny dzienny limit 100 analiz AI został osiągnięty. Limit odnawia się o 00:00 UTC. Analiza matematyczna pozostaje bez limitu.', errorRateLimitUnavailable: 'Analiza AI jest chwilowo niedostępna. Spróbuj ponownie później.', errorMalformed: 'Usługa AI zwróciła nieczytelną analizę. Spróbuj ponownie.', errorConnection: 'Nie udało się połączyć z usługą AI. Sprawdź połączenie i spróbuj ponownie.', errorGeneric: 'Nie udało się przeanalizować rozdania. Spróbuj ponownie.',
   generatedInOtherLanguagePl: 'Ta analiza została wygenerowana po angielsku. Uruchom analizę ponownie, aby otrzymać wersję polską.',
   generatedInOtherLanguageEn: 'This analysis was generated in Polish. Run the analysis again to receive the English version.',
   reviewEyebrow: 'ANALIZA STRATEGICZNA AI', reviewTitle: 'Analiza rozdania', dataConfidence: 'Kompletność danych · {{confidence}}',
@@ -93,6 +98,16 @@ const pl = {
   cardPickerEyebrow: 'WYBÓR KARTY', cardPickerTitle: 'Wybierz kartę', usedCardsUnavailable: 'Karty użyte w rozdaniu są niedostępne.', close: 'Zamknij', clearSelectedField: 'Wyczyść wybrane pole',
   suitSpades: 'Piki', suitHearts: 'Kier', suitDiamonds: 'Karo', suitClubs: 'Trefl', faceDownCard: 'Zakryta karta',
   startingStack: 'Stack startowy', allInAction: 'All-in — pozostały stack', playerAllIn: 'Gracz jest all-in', remainingStack: 'Pozostały stack', effectiveStack: 'Efektywny stack', startingEffectiveStack: 'Początkowy efektywny stack', maximumAvailable: 'Maksymalnie dostępne', betAllIn: 'Bet all-in', raiseAllIn: 'Raise all-in', callAllIn: 'Call all-in: {{amount}} BB', facingAllIn: 'Grasz przeciw all-in', canFullCall: 'Możliwy pełny call', spr: 'SPR', streetStart: 'na początku ulicy', sprVeryLow: 'Bardzo niski SPR', sprLow: 'Niski SPR', sprMedium: 'Średni SPR', sprHigh: 'Wysoki SPR', sprHelp: 'SPR (Stack-to-Pot Ratio) to stosunek pozostałego efektywnego stacka do puli. Pokazuje, jak duże są stacki względem puli i jak łatwo cały stack może zostać zaangażowany w rozdanie.', playerHasOnly: 'Gracz ma tylko {{amount}} BB w stacku.', opponentAllInOnlyCallFold: 'Przeciwnik jest all-in — dalsze zakłady nie są możliwe.', playerAlreadyAllIn: 'Gracz jest już all-in i nie może wykonać kolejnej akcji.', invalidStartingStack: 'Stack startowy każdego gracza musi być dodatni.', targetBelowContribution: 'Kwota docelowa nie może być mniejsza od wcześniejszego wkładu na tej ulicy.',  actionErrorDuplicatePositions: 'Hero i Villain muszą mieć różne pozycje przy stole.', actionErrorBlinds: 'Blindy muszą być nieujemne, a small blind nie może być większy od big blinda.',
+  handValidationSequence: 'Nieprawidłowa kolejność akcji. Dokończ zakłady na bieżącej ulicy i wybierz właściwego gracza oraz kolejną ulicę.',
+  handValidationBoardBehind: 'Dodaj karty boardu dla ulicy tej akcji lub popraw ulicę akcji.',
+  handValidationMinimumRaise: 'Minimalny bet lub raise do wynosi {{amount}} BB. Mniejszy zakład jest możliwy tylko jako legalny all-in.',
+  handValidationNotReopened: 'Zakłady nie zostały ponownie otwarte — raise nie jest dostępny po krótkim all-in.',
+  handValidationUnresolvedBoard: 'Najpierw rozstrzygnij zakład przez call lub fold albo cofnij board do ulicy tego zakładu.',
+  handValidationAmount: 'Ta akcja nie może mieć ręcznie podanej kwoty.',
+  handValidationFacts: 'Wartości matematyczne nie odpowiadają historii rozdania. Sprawdź kwoty, blindy i stacki.',
+  handValidationInput: 'Uzupełnij poprawne karty, zakresy, blindy i stacki. Maksymalnie 60 akcji; wartości w BB nie mogą przekraczać 1 000 000.',
+  handValidationAllInComplete: 'Wkłady gracza all-in są wyrównane — dalsze akcje nie są możliwe.',
+  handValidationUnresolvedAllIn: 'Nie zmieniaj ulicy przed odpowiedzią call lub fold na zakład all-in.',
   actionErrorAfterFold: 'Nie można wykonać akcji po foldzie.', actionErrorStreetOrder: 'Ulice muszą występować w kolejności: preflop, flop, turn, river.',
   actionErrorCheckFacingBet: 'Check jest niemożliwy — do sprawdzenia pozostaje {{amount}} bb.', actionErrorCallWithoutBet: 'Call jest niemożliwy — nie ma betu do wyrównania.',
   actionErrorBetFacingBet: 'Przy otwartym becie wybierz Raise zamiast Bet.', actionErrorRaiseWithoutBet: 'Raise wymaga wcześniejszego betu — wybierz Bet.', actionErrorPositiveAmount: 'Podaj dodatnią kwotę w bb.', actionErrorRaiseTarget: 'Raise to musi być większy niż aktualny bet ({{amount}} bb).',
@@ -160,7 +175,7 @@ const en: { [K in keyof typeof pl]: string } = {
   actualHandNotIncluded: 'Hero’s actual hand ({{hand}}) is not included in the selected Hero range.',
   editRangeMatrix: 'Edit range matrix', customRangeDescription: 'Choose starting-hand classes. Blocked combinations are excluded from counts, while selected classes remain selected.',
   emptyCustomRange: 'The selected Custom range is empty or fully blocked.',
-  handComplete: 'No further actions — hand is complete.', bothPlayersAllIn: 'Both players are all-in — no further betting is possible.', bettingRoundComplete: 'Betting round complete.', roundCompleteAdvance: 'Betting round complete. Next action: {{street}}.',
+  handComplete: 'No further actions — hand is complete.', bothPlayersAllIn: 'The all-in player’s contributions are matched — no further betting is possible.', bettingRoundComplete: 'Betting round complete.', roundCompleteAdvance: 'Betting round complete. Next action: {{street}}.',
   actionsSection: 'Action history', actionAmountHelp: 'Bet and raise amounts are total contributions on that street, in bb.', addAction: '＋ Add action',
   smallBlind: 'Small blind (bb)', bigBlind: 'Big blind (bb)', blindsAuto: 'Blinds are added automatically based on the selected positions.',
   firstActionEmpty: 'Add the first action. Blind contributions are already included in the pot.', street: 'Street', player: 'Player', action: 'Action',
@@ -175,9 +190,13 @@ const en: { [K in keyof typeof pl]: string } = {
   aiDisclaimer: 'AI interprets strategy. Equity, pot odds, and EV come from the deterministic poker engine.',
   aiRequestTitle: 'Could not prepare the analysis', retry: 'Try again',
   villainCardsOptional: 'Villain cards are optional — choose both or clear the selected one.', equityCalculationError: 'Could not calculate equity.',
+  errorDeploymentAccess: 'Private deployment authorization is required. Reload the page and authenticate through the browser prompt.', errorDeploymentUnavailable: 'Private deployment access is temporarily unavailable. Try again later.',
+  errorMathVerification: 'Mathematical verification is temporarily unavailable. Try again.', mathServerUnverified: 'equity was not verified within the server computation budget; client values are not used', errorUnsupportedMediaType: 'The analysis request must use JSON.', errorRequestOrigin: 'The analysis request was blocked. Open the app at a trusted address and try again.', errorRequestSecurity: 'Analysis request protection is temporarily unavailable. Please try again later.',
   errorNotConfigured: 'AI analysis is not configured. Add an API key to the server configuration to enable it.', errorConfiguration: 'AI model configuration is unavailable. Check the server settings.', errorBillingQuota: 'The AI service usage or billing limit was reached.',
   errorInvalidInput: 'The analysis data is invalid. Check the supplied values.', errorInvalidHand: 'The hand data is invalid. Check the cards, ranges, stacks, and SPR values.', errorInvalidActions: 'The action history is inconsistent. Check the action order and amounts.', errorInvalidRequest: 'Could not read the analysis request.', errorTooLarge: 'The analysis data is too large.', errorTimeout: 'The analysis took too long. Please try again.',
-  errorProvider: 'The AI service is temporarily unavailable. Please try again.', errorRateLimited: 'Too many AI analyses were requested. Wait a moment and try again.', errorDailyLimitReached: 'The daily AI analysis limit has been reached. Please try again after it resets.', errorRateLimitUnavailable: 'AI analysis is temporarily unavailable. Please try again later.', errorMalformed: 'The AI service returned an unreadable analysis. Please try again.', errorConnection: 'Could not connect to the AI service. Check your connection and try again.', errorGeneric: 'Could not analyze the hand. Please try again.',
+  aiDailyAllowance: 'Mathematical Analysis is free and unlimited. AI Analysis is free: up to 5 validated requests per IP each day and 100 in total. Limits reset at 00:00 UTC.',
+  errorAIDisabled: 'AI analysis is temporarily paused. Mathematical Analysis remains available.', errorAILimitsConfiguration: 'AI analysis is temporarily unavailable because its limits are misconfigured.', errorAIBusy: 'All AI analysis slots are busy. Please try again shortly.', errorAIConcurrencyUnavailable: 'AI analysis cannot safely start right now. Please try again later.',
+  errorProvider: 'The AI service is temporarily unavailable. Please try again.', errorRateLimited: 'Too many AI analyses were requested. Wait a moment and try again.', errorIPDailyLimitReached: 'The daily limit of 5 AI analyses for this IP has been reached. It resets at 00:00 UTC. Mathematical Analysis remains unlimited.', errorDailyLimitReached: 'The shared daily limit of 100 AI analyses has been reached. It resets at 00:00 UTC. Mathematical Analysis remains unlimited.', errorRateLimitUnavailable: 'AI analysis is temporarily unavailable. Please try again later.', errorMalformed: 'The AI service returned an unreadable analysis. Please try again.', errorConnection: 'Could not connect to the AI service. Check your connection and try again.', errorGeneric: 'Could not analyze the hand. Please try again.',
   generatedInOtherLanguagePl: 'Ta analiza została wygenerowana po angielsku. Uruchom analizę ponownie, aby otrzymać wersję polską.',
   generatedInOtherLanguageEn: 'This analysis was generated in Polish. Run the analysis again to receive the English version.',
   reviewEyebrow: 'AI STRATEGIC ANALYSIS', reviewTitle: 'AI Hand Review', dataConfidence: 'Data completeness · {{confidence}}',
@@ -192,6 +211,16 @@ const en: { [K in keyof typeof pl]: string } = {
   cardPickerEyebrow: 'CARD SELECTION', cardPickerTitle: 'Choose a card', usedCardsUnavailable: 'Cards already in the hand are unavailable.', close: 'Close', clearSelectedField: 'Clear selected slot',
   suitSpades: 'Spades', suitHearts: 'Hearts', suitDiamonds: 'Diamonds', suitClubs: 'Clubs', faceDownCard: 'Face-down card',
   startingStack: 'Starting stack', allInAction: 'All-in — full remaining stack', playerAllIn: 'Player is all-in', remainingStack: 'Remaining stack', effectiveStack: 'Effective stack', startingEffectiveStack: 'Starting effective stack', maximumAvailable: 'Maximum available', betAllIn: 'Bet all-in', raiseAllIn: 'Raise all-in', callAllIn: 'All-in call: {{amount}} BB', facingAllIn: 'Facing an all-in', canFullCall: 'Full call available', spr: 'SPR', streetStart: 'at street start', sprVeryLow: 'Very low SPR', sprLow: 'Low SPR', sprMedium: 'Medium SPR', sprHigh: 'High SPR', sprHelp: 'SPR (Stack-to-Pot Ratio) is the ratio of the remaining effective stack to the pot. It shows how deep the players are relative to the pot and how easily the entire stack can become committed.', playerHasOnly: 'Player has only {{amount}} BB remaining.', opponentAllInOnlyCallFold: 'Opponent is all-in — only call or fold is available.', playerAlreadyAllIn: 'Player is already all-in and cannot act again.', invalidStartingStack: 'Each player must have a positive starting stack.', targetBelowContribution: 'The target cannot be below the player’s previous contribution on this street.', actionErrorDuplicatePositions: 'Hero and Villain must have different table positions.', actionErrorBlinds: 'Blinds must be non-negative, and the small blind cannot exceed the big blind.',
+  handValidationSequence: 'Invalid action order. Complete betting on the current street and select the correct player and next street.',
+  handValidationBoardBehind: 'Add the board cards for this action’s street or correct the action’s street.',
+  handValidationMinimumRaise: 'The minimum bet or raise-to is {{amount}} BB. A smaller wager is allowed only as a legal all-in.',
+  handValidationNotReopened: 'Betting has not reopened — a raise is unavailable after a short all-in.',
+  handValidationUnresolvedBoard: 'Resolve the wager with a call or fold first, or return the board to the wager’s street.',
+  handValidationAmount: 'This action cannot have a manually entered amount.',
+  handValidationFacts: 'Mathematical values do not match the hand history. Check amounts, blinds and stacks.',
+  handValidationInput: 'Complete valid cards, ranges, blinds and stacks. Maximum 60 actions; BB values cannot exceed 1,000,000.',
+  handValidationAllInComplete: 'The all-in player’s contributions are matched — no further actions are possible.',
+  handValidationUnresolvedAllIn: 'Do not change streets before calling or folding to the all-in wager.',
   actionErrorAfterFold: 'No action can be taken after a fold.', actionErrorStreetOrder: 'Streets must be ordered preflop, flop, turn, river.',
   actionErrorCheckFacingBet: 'Check is not possible — {{amount}} bb remains to call.', actionErrorCallWithoutBet: 'Call is not possible — there is no bet to match.',
   actionErrorBetFacingBet: 'Choose Raise instead of Bet when facing a bet.', actionErrorRaiseWithoutBet: 'Raise requires a previous bet — choose Bet.', actionErrorPositiveAmount: 'Enter a positive amount in bb.', actionErrorRaiseTarget: 'Raise to must exceed the current bet ({{amount}} bb).',
@@ -212,6 +241,8 @@ export function formatNumber(language: AppLanguage, value: number, fractionDigit
   return new Intl.NumberFormat(language === 'pl' ? 'pl-PL' : 'en-US', { minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits }).format(value);
 }
 export function translateActionError(message: string, language: AppLanguage, t: (key: TranslationKey, values?: Record<string, string | number>) => string): string {
+  if (message.includes('Zakłady są zakończone')) return t('handValidationAllInComplete');
+  if (message.includes('Nie można zmienić ulicy')) return t('handValidationUnresolvedAllIn');
   const remaining = message.match(/(?:Gracz ma tylko ([\d.,]+) BB w stacku|Player has only ([\d.,]+) BB remaining)/);
   if (remaining) return t('playerHasOnly', { amount: formatNumber(language, Number((remaining[1] ?? remaining[2]).replace(',', '.')), 2).replace(/(?:,00|\.00)$/, '') });
   if (message.includes('Stack startowy każdego gracza') || message.includes('Each player must have a positive starting stack')) return t('invalidStartingStack');
@@ -253,4 +284,16 @@ export function translateMissingInformation(message: string, language: AppLangua
   if (message.startsWith('Custom opponent profile')) return t('missingCustomStats');
   if (message.startsWith('Effective stack')) return t('missingStack');
   return message;
+}
+
+/** Stable shared error codes, without exposing internal payload paths to the user. */
+export function translateHandValidation(issue: HandValidationError, language: AppLanguage, t: Translate): string {
+  if (issue.code === 'minimumRaise') return t('handValidationMinimumRaise', { amount: formatNumber(language, issue.minimumBb ?? 0, 2) });
+  if (issue.code === 'wager' && issue.detail) return translateActionError(issue.detail, language, t);
+  const keys: Record<HandValidationError['code'], TranslationKey> = {
+    sequence: 'handValidationSequence', boardBehind: 'handValidationBoardBehind', wager: 'errorInvalidActions',
+    amount: 'handValidationAmount', notReopened: 'handValidationNotReopened', minimumRaise: 'handValidationMinimumRaise',
+    unresolvedBoard: 'handValidationUnresolvedBoard', facts: 'handValidationFacts', input: 'handValidationInput',
+  };
+  return t(keys[issue.code]);
 }
